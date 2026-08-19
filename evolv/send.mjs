@@ -71,7 +71,12 @@ if (opt.mknew) {
   const m = opt.session
     ? items.find((i) => i.sessionId === opt.session || short(i.sessionId) === opt.session || i.sessionId.includes(opt.session))
     : items[0];
-  if (!m) { console.error(`evolv send: session not found: ${opt.session}`); process.exit(1); }
+  if (!m) {
+    if (!items.length)
+      console.error(`evolv send: no sessions on ${BASE} yet — create one with \`evolv send --new "your task"\` or in the browser`);
+    else console.error(`evolv send: session not found: ${opt.session ?? "(no default)"}`);
+    process.exit(1);
+  }
   sid = m.sessionId;
 }
 
