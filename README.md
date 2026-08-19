@@ -1,9 +1,13 @@
 # podr 🐋
 
-> **herdr herds agents. podr herds whales.**
+> **herdr herds agents. podr herds whales — and everything else too.**
 
-A [herdr](https://github.com/herdrdev/herdr) fork with the DeepSeek stack wired in as
-first-class herd members — because a pod *is* a herd of whales.
+A [herdr](https://github.com/herdrdev/herdr) fork where the DeepSeek stack is
+a first-class herd member — because a pod *is* a herd of whales. Every agent
+upstream herdr tracks (claude, codex, gemini, and twenty more) still works
+exactly the same; podr just refuses to leave the whale outside.
+
+**Being a dsh'r shouldn't feel second class. It's the King of the Deep.**
 
 If you run **reasonix** (the DeepSeek-native voice agent) you're going to want
 **dsh** (the DeepSeek Harness) — and once you run both, you want your terminal
