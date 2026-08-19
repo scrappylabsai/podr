@@ -97,6 +97,18 @@ evolv attach     # spawn-on-demand inherits the overlay
 See `evolv/examples/ollama-cloud.patch.yml` — it also fixes the trap where
 Ollama Cloud rejects dsh's default 256k max-token request with a hard 400.
 
+## Gotchas we hit so you don't
+
+- **First boot is silent and slow.** The first `evolv web` (or the first attach that
+  spawns one) installs dsh's web profile — minutes with no output. It's working; wait.
+  Never start two first-boots at once (npm's cache lock corrupts: `ECOMPROMISED`).
+- **Effort values are adapter-side, not backend-validated.** The DeepSeek adapter offers
+  `off/low/high/max`, but Ollama's API accepts `high/medium/low/none` — so `max` against an
+  Ollama lane is a hard 400. On cloud lanes stick to `low`/`high`.
+- **Model selection is sticky.** A new session inherits the last selection, which can beat
+  your overlay's default — pass `evolv send --model …:cloud --effort high` explicitly when
+  lane-hopping.
+
 ## Status — read this
 
 - **dsh is pre-1.0 and moving.** Everything here is validated against the

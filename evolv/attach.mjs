@@ -108,13 +108,13 @@ async function ensureHost() {
     child.on("error", (e) => out(C.red(`spawn failed: ${e.message}`))); // wait loop then falls through
     child.unref();
     closeSync(logFd);
-    process.stdout.write(C.dim("waiting for host"));
-    for (let i = 0; i < 45; i++) {
+    process.stdout.write(C.dim("waiting for host (first boot installs the dsh profile — can take minutes)"));
+    for (let i = 0; i < 300; i++) {
       await new Promise((r) => setTimeout(r, 1000));
-      process.stdout.write(C.dim("."));
+      if (i % 3 === 0) process.stdout.write(C.dim("."));
       if (await hostUp(1500)) { out(C.green(" up")); return true; }
     }
-    out(C.red(" gave up after 45s"));
+    out(C.red(" gave up after 5 min — check /tmp/evolv-web.log"));
   }
   out(C.yellow("falling back to read-only file tail (evolv-tail --follow)"));
   const t = spawn(`${process.env.HOME}/bin/evolv-tail`, ["--follow"], { stdio: "inherit" });
