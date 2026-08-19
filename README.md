@@ -50,6 +50,7 @@ emits the contract the manifest reads (`src/detect/manifests/evolv.toml`).
 ZIG=/path/to/zig LIBGHOSTTY_VT_SIMD=false cargo build --release
 
 # 2. Put evolv on your PATH and point it at your model endpoint
+#    (evolv checks for node >= 22.15 — dsh's hard floor — and says so if not)
 export PATH="$PWD/evolv:$PATH"
 export DEEPSEEK_BASE_URL=http://localhost:8000/v1   # any OpenAI-compatible endpoint
 export DEEPSEEK_API_KEY=local
@@ -63,6 +64,7 @@ read-only file tail of `~/.dsh/sessions`), tails the most recent session live,
 and joins the herd:
 
 - `l` — flip between sessions (no reconnect; the event mux carries them all)
+- `m` — **model + thinking-effort picker** (the DeepSeek adapter exposes `off/high/max`)
 - `i` — queue a prompt · `s` — **steer into the running turn** · `c` — cancel
 - `y` / `n` — answer tool approvals from the pane (the browser stays live too;
   first answer wins, the other face clears)
@@ -76,7 +78,24 @@ the host fans events out to every connected client and sessions have no owner.
 evolv send --list
 evolv send --session <id> --watch "run the tests and summarize failures"
 evolv send --steer "stop — wrong directory, use ./services"
+evolv send --models                     # catalog + current selection + routability
+evolv send --effort max                 # crank the thinking level, keep the model
+evolv send --model deepseek-official/deepseek-v4-pro --effort high
 ```
+
+### Second lanes (e.g. Ollama Cloud)
+
+One install can serve multiple model lanes. Point `DEEPSEEK_BASE_URL` at the lane
+and pass a config overlay for anything the lane needs (model names, token caps):
+
+```bash
+export DEEPSEEK_BASE_URL=http://<ollama-host>:11434/v1
+export EVOLV_PATCH=$PWD/evolv/examples/ollama-cloud.patch.yml
+evolv attach     # spawn-on-demand inherits the overlay
+```
+
+See `evolv/examples/ollama-cloud.patch.yml` — it also fixes the trap where
+Ollama Cloud rejects dsh's default 256k max-token request with a hard 400.
 
 ## Status — read this
 

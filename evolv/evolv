@@ -17,7 +17,21 @@
 
 set -euo pipefail
 
+# dsh needs node >= 22.15 (node:zlib zstd exports); fail early with a real message.
+NODE_V="$(node -v 2>/dev/null | tr -d v || true)"
+if [ -z "$NODE_V" ]; then
+  echo "evolv: node not found — install Node.js >= 22.15" >&2; exit 1
+fi
+if [ "$(printf '%s\n22.15.0\n' "$NODE_V" | sort -V | head -1)" != "22.15.0" ]; then
+  echo "evolv: node $NODE_V is too old — dsh needs >= 22.15 (node:zlib zstd)." >&2
+  echo "evolv: set DSH_NODE_BIN or upgrade node." >&2; exit 1
+fi
+
 DSH_PIN="${DSH_PIN:-0.1.0-rc.6}"
+# Optional config overlay (e.g. examples/ollama-cloud.patch.yml) applied to
+# web/headless boots — how you point one install at a second lane.
+PATCHES=()
+[ -n "${EVOLV_PATCH:-}" ] && PATCHES+=(--patch "$EVOLV_PATCH")
 export DEEPSEEK_BASE_URL="${DEEPSEEK_BASE_URL:-http://127.0.0.1:8000/v1}"
 export DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-local}"
 
@@ -37,7 +51,7 @@ case "${1:-}" in
     ;;
   web)
     shift
-    exec npx -y "@deepseek-ai/dsh@${DSH_PIN}" --profile web "$@"
+    exec npx -y "@deepseek-ai/dsh@${DSH_PIN}" --profile web ${PATCHES[@]+"${PATCHES[@]}"} "$@"
     ;;
   ""|--help|-h)
     sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
@@ -45,8 +59,8 @@ case "${1:-}" in
     ;;
   *)
     if [[ "$1" == -* ]]; then
-      exec npx -y "@deepseek-ai/dsh@${DSH_PIN}" "$@"
+      exec npx -y "@deepseek-ai/dsh@${DSH_PIN}" ${PATCHES[@]+"${PATCHES[@]}"} "$@"
     fi
-    exec npx -y "@deepseek-ai/dsh@${DSH_PIN}" --profile headless "$@"
+    exec npx -y "@deepseek-ai/dsh@${DSH_PIN}" --profile headless ${PATCHES[@]+"${PATCHES[@]}"} "$@"
     ;;
 esac

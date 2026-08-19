@@ -1,0 +1,24 @@
+# evolv overlay: run the dsh host against Ollama's cloud DeepSeek models.
+#   export DEEPSEEK_BASE_URL=http://<your-ollama-host>:11434/v1
+#   export EVOLV_PATCH=$PWD/examples/ollama-cloud.patch.yml
+#   evolv web            # or: evolv attach (spawn-on-demand inherits the patch)
+# Ollama Cloud hard-caps output at 65536 tokens; dsh's adapter default (256000)
+# is a guaranteed HTTP 400 without this override.
+- id: llm-deepseek
+  name: '@deepseek-ai/dsh-llm-deepseek'
+  config:
+    maxTokens: 65536
+    models:
+      - id: deepseek-v4-flash:cloud
+        name: DeepSeek-V4-Flash (Ollama Cloud)
+        contextWindow: 1000000
+        maxTokens: 65536
+      - id: deepseek-v4-pro:cloud
+        name: DeepSeek-V4-Pro (Ollama Cloud)
+        contextWindow: 524288
+        maxTokens: 65536
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: deepseek-official
+    model: deepseek-v4-flash:cloud

@@ -288,7 +288,7 @@ async function showHeader(item) {
   st.title = typeof title === "string" ? title : "";
   out("");
   out(C.bold(`◍ ${sanitizeLine(st.title || "(untitled)")}`) + C.gray(`  ${shortId(st.sid)}  ${sanitizeLine(item?.cwd ?? "")}`));
-  out(C.gray(`  ${item?.running ? "running" : "idle"} · l sessions · i prompt · s steer · c cancel · q quit`));
+  out(C.gray(`  ${item?.running ? "running" : "idle"} · l sessions · m model · i prompt · s steer · c cancel · q quit`));
   st.turnOpen = !!item?.running;
   st.pending.clear();
   refreshTitle();
@@ -300,6 +300,12 @@ async function attachTo(sid, items) {
   st.sid = sid;
   const item = (items ?? (await rpc("session.list")).items).find((i) => i.sessionId === sid);
   await showHeader(item);
+  try {
+    const v = await rpc("session.models", { sessionId: sid });
+    const c = v.current ?? {};
+    out(C.gray(`  ${sanitizeLine(`${c.provider}/${c.model}`)}${c.reasoningEffort ? " · effort " + sanitizeLine(c.reasoningEffort) : ""}`) +
+        (v.routable ? "" : C.red("  ⚠ model not routable on this host — press m")));
+  } catch {}
   try {
     const h = await rpc("session.history", { sessionId: sid, maxMessages: 10 });
     for (const e of h.events ?? []) renderEvent(e.event, e.view, false);
@@ -427,6 +433,56 @@ function answerQuestion(n) {
   return true;
 }
 
+// ---------- model + effort picker (session.selectModel) ----------
+let mp = null; // {stage:'model'|'effort', buf, models, chosen}
+async function openModelPicker() {
+  if (!st.sid) return;
+  const v = await rpc("session.models", { sessionId: st.sid });
+  endStream();
+  const cur = v.current ?? {};
+  out("");
+  out(C.bold("─ models ─") + C.gray(` current: ${sanitizeLine(`${cur.provider}/${cur.model}`)}${cur.reasoningEffort ? " · " + sanitizeLine(cur.reasoningEffort) : ""}`) + (v.routable ? "" : C.red(" · NOT ROUTABLE")));
+  const flat = [];
+  for (const g of v.groups ?? []) for (const m of g.models ?? []) flat.push({ provider: g.id, model: m.id, efforts: m.reasoning?.efforts ?? [] });
+  for (const f of v.failures ?? []) out(C.yellow(`  (catalog failure: ${sanitizeLine(f.id)})`));
+  if (!flat.length) { out(C.yellow("empty catalog — a serving route can still work: evolv send --model <provider/model>")); return; }
+  flat.slice(0, 15).forEach((m, i) =>
+    out(` ${String(i + 1).padStart(2)} ${sanitizeLine(`${m.provider}/`)}${C.bold(sanitizeLine(m.model))}${m.efforts.length ? C.gray(` (efforts: ${m.efforts.map((e) => sanitizeLine(e.id)).join("/")})`) : ""}${m.provider === cur.provider && m.model === cur.model ? C.cyan(" ← current") : ""}`));
+  out(C.gray("  number + Enter · Esc cancels"));
+  mp = { stage: "model", buf: "", models: flat.slice(0, 15), chosen: null };
+}
+function applyModel(m, effort) {
+  const payload = { sessionId: st.sid, provider: m.provider, model: m.model };
+  if (effort) payload.reasoningEffort = effort;
+  mp = null;
+  rpc("session.selectModel", payload)
+    .then((v) => { const sl = v.selected ?? payload; out(C.green(`✔ ${sanitizeLine(`${sl.provider}/${sl.model}`)}${sl.reasoningEffort ? " · effort " + sanitizeLine(sl.reasoningEffort) : ""}`)); })
+    .catch((e) => out(C.red(`selectModel failed: ${e.message}`)));
+}
+function mpKey(ch) {
+  if (ch === "\x1b" || ch === "\x03") { mp = null; out(C.gray("(cancelled)")); return; }
+  if (ch === "\r" || ch === "\n") {
+    out("");
+    const n = parseInt(mp.buf, 10);
+    mp.buf = "";
+    if (mp.stage === "model") {
+      const m = mp.models[n - 1];
+      if (!m) { mp = null; out(C.gray("(no such model)")); return; }
+      if (m.efforts.length) {
+        mp.chosen = m;
+        mp.stage = "effort";
+        m.efforts.slice(0, 9).forEach((e, i) => out(` ${i + 1} ${sanitizeLine(e.id)}${e.name && e.name !== e.id ? C.gray(" " + sanitizeLine(e.name)) : ""}`));
+        out(C.gray("  effort number + Enter · Enter alone keeps adapter default"));
+        return;
+      }
+      return applyModel(m, undefined);
+    }
+    const e = Number.isNaN(n) ? undefined : mp.chosen.efforts[n - 1]?.id;
+    return applyModel(mp.chosen, e);
+  }
+  if (/[0-9]/.test(ch)) { mp.buf += ch; process.stdout.write(ch); }
+}
+
 function cancelTurn() {
   if (!st.sid) return;
   rpc("session.cancel", { sessionId: st.sid })
@@ -445,7 +501,7 @@ async function main() {
 
   const runningN = items.filter((i) => i.running).length;
   out(C.gray(`evolv attach · host ${opt.host} · ${items.length} sessions${runningN ? ` (${runningN} running)` : ""}`));
-  out(C.gray(`keys: l sessions · i prompt · s steer(into running turn) · c cancel turn · y/n answer approvals · 1-9 answer questions · q quit · "/"=host cmd`));
+  out(C.gray(`keys: l sessions · m model/effort · i prompt · s steer(into running turn) · c cancel turn · y/n approvals · 1-9 questions · q quit · "/"=host cmd`));
   await attachTo(sid, items);
 
   // keys
@@ -456,12 +512,14 @@ async function main() {
     process.stdin.on("data", (chunk) => {
       for (const ch of chunk) { // raw-mode chunks can carry pastes like "12\r"
         if (input) { inputKey(ch); continue; }
+        if (mp) { mpKey(ch); continue; }
         if (pickerBuf !== null) { pickerKey(ch); continue; }
         if (ch === "q" || ch === "\x03") return quit(0);
         if (ch === "l") openPicker().catch((e) => out(C.red(e.message)));
         else if (ch === "i") openInput("queue");
         else if (ch === "s") openInput("steer");
         else if (ch === "c") cancelTurn();
+        else if (ch === "m") openModelPicker().catch((e) => out(C.red(e.message)));
         else if (ch === "y") answerApproval("allowed-once");
         else if (ch === "n") answerApproval("rejected");
         else if (/[1-9]/.test(ch)) answerQuestion(parseInt(ch, 10));

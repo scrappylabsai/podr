@@ -11,10 +11,13 @@
 //   evolv send --new [--cwd DIR] "text"       create a fresh session first
 //   evolv send --cancel [--session <id>]      cancel the active turn
 //   evolv send --list                         one-line-per-session inventory
+//   evolv send --models [--session id]        model catalog + current selection
+//   evolv send --model <provider/model> [--effort <id>] [--session id]
+//   evolv send --effort <id> [--session id]   keep model, change reasoning effort
 //   any command: [--host 127.0.0.1:3080] [--watch]
 
 const argv = process.argv.slice(2);
-const opt = { host: "127.0.0.1:3080", session: null, steer: false, cancel: false, list: false, mknew: false, cwd: null, watch: false, text: [] };
+const opt = { host: "127.0.0.1:3080", session: null, steer: false, cancel: false, list: false, mknew: false, cwd: null, watch: false, models: false, model: null, effort: null, text: [] };
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   const next = () => { const v = argv[++i]; if (v === undefined) { console.error(`evolv send: ${a} needs a value`); process.exit(2); } return v; };
@@ -24,9 +27,12 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === "--steer") opt.steer = true;
   else if (a === "--cancel") opt.cancel = true;
   else if (a === "--list") opt.list = true;
+  else if (a === "--models") opt.models = true;
+  else if (a === "--model") opt.model = next();
+  else if (a === "--effort") opt.effort = next();
   else if (a === "--new") opt.mknew = true;
   else if (a === "--watch") opt.watch = true;
-  else if (a === "--help" || a === "-h") { console.log("evolv send [--session id] [--steer|--cancel|--new|--list] [--cwd DIR] [--watch] \"text\""); process.exit(0); }
+  else if (a === "--help" || a === "-h") { console.log("evolv send [--session id] [--steer|--cancel|--new|--list|--models] [--model p/m] [--effort id] [--cwd DIR] [--watch] \"text\""); process.exit(0); }
   else opt.text.push(a);
 }
 const TEXT = opt.text.join(" ");
@@ -67,6 +73,33 @@ if (opt.mknew) {
     : items[0];
   if (!m) { console.error(`evolv send: session not found: ${opt.session}`); process.exit(1); }
   sid = m.sessionId;
+}
+
+if (opt.models) {
+  const v = await rpc("session.models", { sessionId: sid });
+  const c = v.current ?? {};
+  console.log(`current: ${sanitize(`${c.provider}/${c.model}`)}${c.reasoningEffort ? " · effort " + sanitize(c.reasoningEffort) : ""} · ${v.routable ? "routable" : "NOT ROUTABLE"}`);
+  for (const g of v.groups ?? [])
+    for (const m of g.models ?? [])
+      console.log(`  ${sanitize(`${g.id}/${m.id}`)}${m.reasoning?.efforts?.length ? "  efforts: " + m.reasoning.efforts.map((e) => sanitize(e.id)).join("/") : ""}`);
+  for (const f of v.failures ?? []) console.log(`  (catalog failure: ${sanitize(f.id)})`);
+  process.exit(0);
+}
+
+if (opt.model || opt.effort) {
+  const cur = (await rpc("session.models", { sessionId: sid })).current ?? {};
+  let provider = cur.provider, model = cur.model;
+  if (opt.model) {
+    const i = opt.model.indexOf("/");
+    if (i > 0) { provider = opt.model.slice(0, i); model = opt.model.slice(i + 1); }
+    else model = opt.model;
+  }
+  const payload = { sessionId: sid, provider, model };
+  if (opt.effort) payload.reasoningEffort = opt.effort;
+  const v = await rpc("session.selectModel", payload);
+  const sl = v.selected ?? payload;
+  console.log(`selected: ${sanitize(`${sl.provider}/${sl.model}`)}${sl.reasoningEffort ? " · effort " + sanitize(sl.reasoningEffort) : ""} on ${short(sid)}`);
+  if (!TEXT) process.exit(0);
 }
 
 if (opt.cancel) {
