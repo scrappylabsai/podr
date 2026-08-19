@@ -63,10 +63,11 @@ pub enum Agent {
     Qodercli,
     Maki,
     Reasonix,
+    Evolv,
 }
 
 impl Agent {
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -89,9 +90,10 @@ impl Agent {
         Self::Qodercli,
         Self::Maki,
         Self::Reasonix,
+        Self::Evolv,
     ];
 
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 20] = [
+    pub const SCREEN_MANIFEST_AGENTS: [Self; 21] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -112,6 +114,7 @@ impl Agent {
         Self::Qodercli,
         Self::Maki,
         Self::Reasonix,
+        Self::Evolv,
     ];
 }
 
@@ -139,6 +142,7 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::Qodercli => "qodercli",
         Agent::Maki => "maki",
         Agent::Reasonix => "reasonix",
+        Agent::Evolv => "evolv",
     }
 }
 
@@ -172,6 +176,9 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::Qodercli => "qodercli",
         Agent::Maki => "maki",
         Agent::Reasonix => "reasonix",
+        // Bare `evolv` is lanes/headless today; herdr passes args per-start:
+        // `herdr agent start <name> --kind evolv -- attach`
+        Agent::Evolv => "evolv",
     }
 }
 
@@ -209,6 +216,9 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "qodercli" | "qoderclicn" | "qoder" | "qodercn" => Some(Agent::Qodercli),
         "maki" => Some(Agent::Maki),
         "reasonix" | "deepseek-reasonix" => Some(Agent::Reasonix),
+        // attach.mjs: node-wrapper unwrap yields the script basename; the
+        // HERDR_AGENT=evolv env hint resolves through "evolv".
+        "evolv" | "dsh-evolv" | "attach.mjs" => Some(Agent::Evolv),
         _ => None,
     }
 }
@@ -786,6 +796,7 @@ mod tests {
             (Agent::Qodercli, "qodercli"),
             (Agent::Maki, "maki"),
             (Agent::Reasonix, "reasonix"),
+            (Agent::Evolv, "evolv"),
         ];
         assert_eq!(expected.len(), Agent::ALL.len());
         for (agent, executable) in expected {

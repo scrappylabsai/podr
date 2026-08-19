@@ -45,6 +45,7 @@ pub struct AgentSoundOverrides {
     pub qodercli: AgentSoundSetting,
     pub maki: AgentSoundSetting,
     pub reasonix: AgentSoundSetting,
+    pub evolv: AgentSoundSetting,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -142,6 +143,7 @@ impl AgentSoundOverrides {
             Some(Agent::Qodercli) => self.qodercli,
             Some(Agent::Maki) => self.maki,
             Some(Agent::Reasonix) => self.reasonix,
+            Some(Agent::Evolv) => self.evolv,
             None => AgentSoundSetting::Default,
         }
     }
@@ -182,6 +184,7 @@ impl Default for AgentSoundOverrides {
             qodercli: AgentSoundSetting::Default,
             maki: AgentSoundSetting::Default,
             reasonix: AgentSoundSetting::Default,
+            evolv: AgentSoundSetting::Default,
         }
     }
 }
