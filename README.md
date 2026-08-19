@@ -102,9 +102,23 @@ Ollama Cloud rejects dsh's default 256k max-token request with a hard 400.
 - **First boot is silent and slow.** The first `evolv web` (or the first attach that
   spawns one) installs dsh's web profile — minutes with no output. It's working; wait.
   Never start two first-boots at once (npm's cache lock corrupts: `ECOMPROMISED`).
-- **Effort values are adapter-side, not backend-validated.** The DeepSeek adapter offers
-  `off/low/high/max`, but Ollama's API accepts `high/medium/low/none` — so `max` against an
-  Ollama lane is a hard 400. On cloud lanes stick to `low`/`high`.
+- **🔴 The version pin only pins half the stack.** `DSH_PIN` pins the *launcher*
+  (`@deepseek-ai/dsh` via npx), but the launcher then installs a **profile** whose plugin
+  bundles resolve at first-boot time — so they float to whatever is newest then. Measured
+  2026-08-19 across two machines with the *same* `DSH_PIN=0.1.0-rc.6`:
+
+  | Host | launcher | profile plugins |
+  |---|---|---|
+  | installed 2026-08-13 | rc.6 | rc.6 |
+  | installed 2026-08-19 | rc.6 | **rc.8** |
+
+  Both worked, but they are not the same install. Check yours with
+  `ls ~/.dsh/profiles/*/node_modules/@deepseek-ai/dsh-base/package.json`. If you need
+  reproducibility, snapshot `~/.dsh/profiles/` — do not assume the pin did it for you.
+- **Effort values are adapter-side, not backend-validated** — and they move with that drift:
+  the rc.6 adapter offers `off/high/max`, rc.8 offers `off/low/high/max`. Ollama's own API
+  accepts `high/medium/low/none`, so `max` against an Ollama lane is a hard 400. On cloud
+  lanes stick to `low`/`high`.
 - **Model selection is sticky.** A new session inherits the last selection, which can beat
   your overlay's default — pass `evolv send --model …:cloud --effort high` explicitly when
   lane-hopping.
