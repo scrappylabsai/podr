@@ -1,86 +1,94 @@
-# herdr
+# podr 🐋
 
+> **herdr herds agents. podr herds whales.**
 
-<p align="center">
-  <img src="assets/logo.png" alt="herdr" width="100" />
-</p>
+A [herdr](https://github.com/herdrdev/herdr) fork with the DeepSeek stack wired in as
+first-class herd members — because a pod *is* a herd of whales.
 
-<p align="center">
-  <a href="https://herdr.dev">herdr.dev</a> · <a href="#install">install</a> · <a href="https://herdr.dev/docs/quick-start/">quick start</a> · <a href="https://herdr.dev/docs/">docs</a>
-</p>
+If you run **reasonix** (the DeepSeek-native voice agent) you're going to want
+**dsh** (the DeepSeek Harness) — and once you run both, you want your terminal
+multiplexer to actually *see* them: which pane is working, which one is blocked
+on an approval, which one is waiting on you. That's podr.
 
-<p align="center">
-  English · <a href="README.zh-CN.md">简体中文</a>
-</p>
+## What's in the pod
 
-<p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-666666?labelColor=333333" alt="Apache 2.0 license" /></a>
-  <a href="https://github.com/herdrdev/herdr/releases"><img src="https://img.shields.io/github/downloads/herdrdev/herdr/total?labelColor=333333&color=666666" alt="total GitHub release downloads" /></a>
-  <a href="https://github.com/herdrdev/herdr/stargazers"><img src="https://img.shields.io/github/stars/herdrdev/herdr?labelColor=333333&color=666666&logo=github" alt="GitHub stars" /></a>
-  <a href="https://github.com/herdrdev/herdr/releases/latest"><img src="https://img.shields.io/github/v/release/herdrdev/herdr?label=release&labelColor=333333&color=666666" alt="latest stable release" /></a>
-  <a href="https://formulae.brew.sh/formula/herdr"><img src="https://img.shields.io/homebrew/v/herdr?label=homebrew&labelColor=333333&color=666666" alt="Homebrew version" /></a>
-  <a href="https://x.com/herdrdev"><img src="https://img.shields.io/badge/follow-%40herdrdev-000000?logo=x&logoColor=white" alt="follow @herdrdev on X" /></a>
-</p>
+| Piece | What it gives you |
+|---|---|
+| **herdr fork** | Everything upstream herdr does, plus two extra agents in the detection registry |
+| **`Agent::Reasonix`** | reasonix panes tracked with working/blocked states (approval panels, question cards, turn/tool spinners — locale-safe rules) |
+| **`Agent::Evolv`** | dsh sessions tracked in the herd via `evolv attach` (below) |
+| **`evolv/`** | A terminal face for the dsh web host: `attach` (live tail + drive), `send` (script sessions from any shell), a thin launcher |
 
----
+## The trick: cooperative agents
 
-https://github.com/user-attachments/assets/043ec09f-4bdd-41d5-aee0-8fda6b83e267
+Every other agent in a multiplexer's herd is tracked by **screen-scraping** —
+hundreds of regex rules over the terminal grid that break whenever the agent's
+UI changes.
 
-**the runtime your coding agents live on.**
+podr's `evolv` agent inverts that. dsh's client is React-over-a-protocol
+(HTTP RPC + a WebSocket event stream), so `evolv attach` is just *another
+client* — and since we own it, it **broadcasts its state** instead of being
+reverse-engineered:
 
-- **always running** — herdr is a background server; the terminals live inside it. close the lid, drop the network, restart the machine — agents keep working and sessions come back. reattach from any terminal, or over ssh.
-- **never hunt for the stuck one** — every pane is marked working, blocked, or idle. when an agent stops and needs an answer, herdr says so.
-- **agent-native** — the cli and socket api are the same surface agents drive: spawn panes, prompt each other, wait until another agent is genuinely blocked. [agent skill →](https://herdr.dev/docs/agent-skill/)
-- **runs what you already run** — claude code, codex, cursor, opencode, grok and the rest. herdr doesn't wrap or replace them, it just owns their terminals.
-- **keyboard and mouse, both first-class** — tmux-style prefix keys *and* click, drag, split. pick per moment, not per tool.
-- **plugins** — extend panes and workflows. [browse the marketplace →](https://herdr.dev/plugins/)
-- **one rust binary, no electron** — runs in whatever terminal you already use.
-
----
-
-## install
-
-```bash
-curl -fsSL https://herdr.dev/install.sh | sh
+```
+✳ evolv · my session      idle
+⠿ evolv · my session      working (turn open)
+⏸ evolv · approval        blocked (waiting on you)
 ```
 
-or `brew install herdr` · `mise use -g herdr` · windows beta: `powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"` · [binaries](https://github.com/herdrdev/herdr/releases)
+Three OSC-title rules. No screen matching. It cannot drift, because the client
+emits the contract the manifest reads (`src/detect/manifests/evolv.toml`).
 
-then start it where the work lives:
-
-```bash
-herdr
-```
-
-run your agents, split panes, walk away. `ctrl+b q` detaches, `herdr` reattaches. [quick start →](https://herdr.dev/docs/quick-start/)
-
-## docs
-
-everything lives at [herdr.dev/docs](https://herdr.dev/docs/): [quick start](https://herdr.dev/docs/quick-start/) · [concepts](https://herdr.dev/docs/concepts/) · [supported agents](https://herdr.dev/docs/agents/) · [keyboard](https://herdr.dev/docs/keyboard/) · [configuration](https://herdr.dev/docs/configuration/) · [session state](https://herdr.dev/docs/session-state/) · [remote](https://herdr.dev/docs/persistence-remote/) · [integrations](https://herdr.dev/docs/integrations/) · [plugins](https://herdr.dev/docs/plugins/) · [socket api](https://herdr.dev/docs/socket-api/)
-
-## thanks
-
-<a href="https://terminaltrove.com/"><img src="assets/sponsors/terminal-trove.png" alt="Terminal Trove" width="200" /></a>
-
-[Terminal Trove](https://terminaltrove.com/) and every backer listed in [SPONSORS.md](./SPONSORS.md) — thank you 🐑
-
-enterprise / partnership: hey@herdr.dev
-
-## agent instructions
-
-if you are an ai agent helping with this repository, read [`AGENTS.md`](./AGENTS.md) before making changes and read [`CONTRIBUTING.md`](./CONTRIBUTING.md) before opening issues or PRs.
-
-## development
+## Quickstart
 
 ```bash
-git clone https://github.com/herdrdev/herdr
-cd herdr
-cargo build --release
+# 1. Build the fork (needs zig for the vendored terminal core)
+ZIG=/path/to/zig LIBGHOSTTY_VT_SIMD=false cargo build --release
 
-just test        # unit tests
-just check       # formatting, tests, and maintenance checks
+# 2. Put evolv on your PATH and point it at your model endpoint
+export PATH="$PWD/evolv:$PATH"
+export DEEPSEEK_BASE_URL=http://localhost:8000/v1   # any OpenAI-compatible endpoint
+export DEEPSEEK_API_KEY=local
+
+# 3. Run herdr (target/release/herdr), open a pane, and:
+evolv attach
 ```
 
-## license
+`evolv attach` finds a running dsh web host (or boots one, or falls back to a
+read-only file tail of `~/.dsh/sessions`), tails the most recent session live,
+and joins the herd:
 
-Herdr is licensed under the [Apache License 2.0](LICENSE).
+- `l` — flip between sessions (no reconnect; the event mux carries them all)
+- `i` — queue a prompt · `s` — **steer into the running turn** · `c` — cancel
+- `y` / `n` — answer tool approvals from the pane (the browser stays live too;
+  first answer wins, the other face clears)
+- `1-9` — answer simple questions · `/…` — host commands (`/permission`, `/plan`, …)
+
+The browser tab and the terminal pane are **two live faces of one session** —
+the host fans events out to every connected client and sessions have no owner.
+
+```bash
+# script it from anywhere:
+evolv send --list
+evolv send --session <id> --watch "run the tests and summarize failures"
+evolv send --steer "stop — wrong directory, use ./services"
+```
+
+## Status — read this
+
+- **dsh is pre-1.0 and moving.** Everything here is validated against the
+  pinned version in `evolv/evolv` (`DSH_PIN`). Don't float latest; bump the pin
+  deliberately and re-test.
+- The wire protocol facts the clients rely on were derived from dsh's shipped
+  contract layer and verified live; upstream has promised breaking changes.
+- Tracks upstream herdr by merge. Same build, same license (Apache-2.0).
+
+## Credits
+
+- [herdr](https://github.com/herdrdev/herdr) — the upstream herd.
+- [Ahmed Al Busaidy](https://github.com/ahmedalbusaidy) — the reasonix
+  detection integration this fork builds on.
+- [DeepSeek](https://github.com/deepseek-ai) — dsh and the whales themselves.
+- Upstream herdr README: [README.upstream.md](README.upstream.md).
+
+🐋 *ScrappyLabs — bring your own AI.*

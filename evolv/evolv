@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# evolv — a thin launcher for the DeepSeek Harness (dsh) with a terminal face.
+# Generic edition shipped with podr; point it at any OpenAI-compatible endpoint.
+#
+#   evolv attach [...]      terminal face of the dsh web host (see attach.mjs)
+#   evolv send   [...]      drive host sessions from any shell (see send.mjs)
+#   evolv web    [...]      boot the dsh web host (UI at http://127.0.0.1:3080)
+#   evolv "task"            headless one-shot
+#
+# Config (env):
+#   DEEPSEEK_BASE_URL   your model endpoint, e.g. http://localhost:8000/v1
+#   DEEPSEEK_API_KEY    key for that endpoint ("local" is fine for local vLLM)
+#   DSH_PIN             dsh version to run (pin it — upstream is pre-1.0 and
+#                       promises breaking changes; never float latest)
+#
+# Requires: node >= 22.15 (dsh needs node:zlib zstd), npx.
+
+set -euo pipefail
+
+DSH_PIN="${DSH_PIN:-0.1.0-rc.6}"
+export DEEPSEEK_BASE_URL="${DEEPSEEK_BASE_URL:-http://127.0.0.1:8000/v1}"
+export DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-local}"
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+case "${1:-}" in
+  attach)
+    shift
+    # HERDR_AGENT is podr's env-hint: the pane is identified as the `evolv`
+    # agent without any screen scraping (see src/detect/manifests/evolv.toml).
+    export HERDR_AGENT=evolv
+    exec node "$HERE/attach.mjs" "$@"
+    ;;
+  send)
+    shift
+    exec node "$HERE/send.mjs" "$@"
+    ;;
+  web)
+    shift
+    exec npx -y "@deepseek-ai/dsh@${DSH_PIN}" --profile web "$@"
+    ;;
+  ""|--help|-h)
+    sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+    exit 0
+    ;;
+  *)
+    if [[ "$1" == -* ]]; then
+      exec npx -y "@deepseek-ai/dsh@${DSH_PIN}" "$@"
+    fi
+    exec npx -y "@deepseek-ai/dsh@${DSH_PIN}" --profile headless "$@"
+    ;;
+esac
