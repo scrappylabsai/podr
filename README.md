@@ -160,6 +160,17 @@ against a vLLM hosting only Flash, Pro looks selectable and 404s at turn time. D
 what your endpoint actually has (`podsh/examples/sparks-vllm.patch.yml` is the
 one-model case).
 
+**Name the locality.** The picker shows only the display *name*, so a model served
+from your own GPU and the same model served from a cloud endpoint are
+indistinguishable — which matters a lot when one of them is private and the other
+is not. The shipped examples mark it:
+
+```
+DeepSeek-V4-Flash ☁ cloud     leaves your machine
+DeepSeek-V4-Flash ⌂ sparks    your hardware
+Gemma4-E4B ⌂ on-box           served locally by this endpoint
+```
+
 **Probe before you list.** On Ollama, cloud models need the `:cloud` tag — the library
 page says `qwen3.5:397b`, the resolvable id is `qwen3.5:cloud`. Some library entries do
 not resolve at all, and some bill extra usage instead of plan usage. Every model in the
