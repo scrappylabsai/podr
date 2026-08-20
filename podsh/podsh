@@ -4,6 +4,7 @@
 #
 #   podsh attach [...]      terminal face of the dsh web host (see attach.mjs)
 #   podsh send   [...]      drive host sessions from any shell (see send.mjs)
+#   podsh lanes             which dsh hosts are up, and what each one serves
 #   podsh web    [...]      boot the dsh web host (UI at http://127.0.0.1:3080)
 #   podsh "task"            headless one-shot
 #
@@ -49,6 +50,10 @@ case "${1:-}" in
   send)
     shift
     exec node "$HERE/send.mjs" "$@"
+    ;;
+  lanes)
+    shift
+    exec node "$HERE/lanes-cli.mjs" "$@"
     ;;
   web)
     shift

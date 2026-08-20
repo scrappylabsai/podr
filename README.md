@@ -89,6 +89,36 @@ podsh send --effort max                 # crank the thinking level, keep the mod
 podsh send --model deepseek-official/deepseek-v4-pro --effort high
 ```
 
+### Lanes: one host per provider
+
+A dsh host *is* a lane — one endpoint, one model catalog. Run several at once
+(one per provider) and podsh will resolve a model to the lane that serves it, so
+you pick the model rather than remembering a port:
+
+```bash
+podsh lanes                          # what is up, and what each one serves
+podsh attach --model glm-5.2:cloud   # attaches to whichever lane has it
+podsh send   --model qwen3.8-27b …   # routes there automatically
+```
+
+```
+lanes (scanned 127.0.0.1:3080-3099):
+  ● 127.0.0.1:3080  serves: deepseek-v4-flash, deepseek-v4-pro
+      85 sessions · global model: glm-5.2:cloud · high
+  ● 127.0.0.1:3090  serves: qwen3.8-27b
+  ● 127.0.0.1:3091  serves: glm-5.2:cloud
+```
+
+Set `PODSH_LANES="host:port,host:port"` to name them explicitly instead of scanning.
+
+**Know this about multi-lane setups:** every host shares `~/.dsh`, so sessions are
+visible from all of them — but the selected model is a *single global setting* in
+`~/.dsh/settings.yaml`, and `selectModel` writes to it. Selecting a model on one
+lane becomes the default for **new sessions on every lane**, including ones that
+cannot serve it (and `routable` stays `true`, because the provider route is fine —
+it is the model that is absent). That is why `podsh lanes` prints the global model
+on every row, and why attach tells you where a mismatched model actually lives.
+
 ### Second lanes (e.g. Ollama Cloud)
 
 One install can serve multiple model lanes. Point `DEEPSEEK_BASE_URL` at the lane

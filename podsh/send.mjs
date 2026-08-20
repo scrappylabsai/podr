@@ -15,6 +15,11 @@
 //   podsh send --model <provider/model> [--effort <id>] [--session id]
 //   podsh send --effort <id> [--session id]   keep model, change reasoning effort
 //   any command: [--host HOST:PORT] [--watch]   (default host: $PODSH_HOST or 127.0.0.1:3080)
+//
+// --model routes to whichever lane serves that model (see `podsh lanes`), because
+// a dsh host is a lane and the selected model is a single global setting.
+
+import { findLaneFor, laneServes, probeLanes } from "./lanes.mjs";
 
 const argv = process.argv.slice(2);
 const opt = { host: process.env.PODSH_HOST || process.env.EVOLV_HOST || "127.0.0.1:3080", session: null, steer: false, cancel: false, list: false, mknew: false, cwd: null, watch: false, models: false, model: null, effort: null, text: [] };
@@ -22,7 +27,7 @@ for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   const next = () => { const v = argv[++i]; if (v === undefined) { console.error(`podsh send: ${a} needs a value`); process.exit(2); } return v; };
   if (a === "--session") opt.session = next();
-  else if (a === "--host") opt.host = next();
+  else if (a === "--host") { opt.host = next(); opt.host_explicit = true; }
   else if (a === "--cwd") opt.cwd = next();
   else if (a === "--steer") opt.steer = true;
   else if (a === "--cancel") opt.cancel = true;
@@ -36,7 +41,18 @@ for (let i = 0; i < argv.length; i++) {
   else opt.text.push(a);
 }
 const TEXT = opt.text.join(" ");
-const BASE = `http://${opt.host.replace(/^https?:\/\//, "")}`;
+let HOST = opt.host.replace(/^https?:\/\//, "");
+if (opt.model && !opt.host_explicit) {
+  const lane = await findLaneFor(opt.model);
+  if (lane && lane.host !== HOST) {
+    console.error(`(routing to ${lane.host} — it serves ${opt.model})`);
+    HOST = lane.host;
+  } else if (!lane) {
+    console.error(`podsh send: no live lane serves "${opt.model}" — see \`podsh lanes\``);
+    process.exit(1);
+  }
+}
+const BASE = `http://${HOST}`;
 const sanitize = (s) => String(s).replace(/[\x00-\x1f\x7f\x9b]/g, " ");
 const short = (sid) => String(sid).replace(/^session-/, "").slice(0, 8);
 
@@ -137,6 +153,18 @@ if (opt.watch) {
     const ev = f.event;
     if (ev?.type === "assistant/chunk" && ev.data?.chunk?.type === "text-delta") { streamed = true; process.stdout.write(sanitize(ev.data.chunk.text)); }
     if (ev?.type === "assistant/message" && !streamed) console.log(sanitize((ev.data?.message?.content ?? []).filter((b) => b.type === "text").map((b) => b.text).join("\n")));
-    if (ev?.type === "turn/end") { clearTimeout(bail); console.log(`\n── turn end (${ev.data?.reason?.kind ?? "?"}) ──`); process.exit(0); }
+    if (ev?.type === "turn/end") {
+      clearTimeout(bail);
+      const reason = ev.data?.reason;
+      console.log(`\n── turn end (${reason?.kind ?? "?"}) ──`);
+      if (reason?.kind === "error" && reason.error) {
+        console.error(`✖ ${sanitize(reason.error.message ?? "unknown error")} [${reason.error.code ?? "?"}]`);
+        const m = String(reason.error.message ?? "").toLowerCase();
+        if (m.includes("reasoning")) console.error(`  ↳ effort values are backend-specific — try --effort off`);
+        else if (m.includes("does not exist")) console.error(`  ↳ pick a model this host serves: podsh send --models`);
+        process.exit(1);
+      }
+      process.exit(0);
+    }
   });
 }

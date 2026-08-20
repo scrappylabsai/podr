@@ -14,11 +14,12 @@
 
 import { spawn } from "node:child_process";
 import { openSync, closeSync } from "node:fs";
+import { probeLanes, laneServes, findLaneFor } from "./lanes.mjs";
 
 // ---------- args ----------
 const argv = process.argv.slice(2);
 // PODSH_HOST lets a launcher/pane set the default host (e.g. a second lane on :3081).
-const opt = { host: process.env.PODSH_HOST || process.env.EVOLV_HOST || "127.0.0.1:3080", session: null, spawn: true, plain: false };
+const opt = { host: process.env.PODSH_HOST || process.env.EVOLV_HOST || "127.0.0.1:3080", session: null, model: null, spawn: true, plain: false };
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   const next = () => {
@@ -30,10 +31,13 @@ for (let i = 0; i < argv.length; i++) {
   else if (a.startsWith("--session=")) opt.session = a.slice(10);
   else if (a === "--host") opt.host = next();
   else if (a.startsWith("--host=")) opt.host = a.slice(7);
+  else if (a === "--model") opt.model = next();
   else if (a === "--no-spawn") opt.spawn = false;
   else if (a === "--plain") opt.plain = true;
   else if (a === "--help" || a === "-h") {
-    console.log(`podsh attach [--session <id>] [--host HOST:PORT] [--no-spawn] [--plain]\n  default host: ${opt.host}${process.env.PODSH_HOST || process.env.EVOLV_HOST ? " (from PODSH_HOST)" : ""}`);
+    console.log(`podsh attach [--session <id>] [--model <id>] [--host HOST:PORT] [--no-spawn] [--plain]
+  --model picks the LANE that serves it (see: podsh lanes)
+  default host: ${opt.host}${process.env.PODSH_HOST || process.env.EVOLV_HOST ? " (from PODSH_HOST)" : ""}`);
     process.exit(0);
   }
 }
@@ -164,6 +168,26 @@ function endStream() {
   if (st.midStream) { emit("\n"); st.midStream = false; }
 }
 
+// Backend errors are the only place the real vocabulary shows up: dsh's adapter
+// validates against ITS list, the backend rejects from its own, and the two can
+// have an empty intersection. Turn that into something actionable.
+function turnErrorHint(msg) {
+  const m = msg.toLowerCase();
+  if (m.includes("reasoning")) {
+    const list = msg.match(/(?:supported|expected)[^.]*?((?:[`'"]?[a-z]+[`'"]?(?:\s*\(default\))?[,\s]+(?:and\s+)?){1,6})/i);
+    const vals = list ? [...new Set((list[1].match(/[a-z]+/gi) || []).filter((v) => v.toLowerCase() !== "default"))] : [];
+    return `this backend's effort values${vals.length ? `: ${vals.join(" / ")}` : " differ from the picker's"}` +
+           ` — press m to change, or use "off" (portable across backends)`;
+  }
+  if (m.includes("does not exist") || m.includes("model not found") || m.includes("model-unavailable"))
+    return `this session points at a model this host does not serve — press m to pick one from its catalog`;
+  if (m.includes("max") && m.includes("token"))
+    return `token cap mismatch — set maxTokens in a config overlay (see podsh/examples/)`;
+  if (m.includes("context") && m.includes("length"))
+    return `context overflow — /compact the session, or lower contextWindow in your overlay`;
+  return null;
+}
+
 function textOfBlocks(blocks) {
   if (!Array.isArray(blocks)) return "";
   return blocks
@@ -182,11 +206,21 @@ function renderEvent(event, view, live) {
       endStream();
       out(C.dim(`── turn ${data?.turn} ──`));
       break;
-    case "turn/end":
+    case "turn/end": {
       st.turnOpen = false;
       endStream();
-      out(C.dim(`── turn ${data?.turn} end (${data?.reason?.kind ?? data?.reason ?? "?"}) ──`));
+      const reason = data?.reason;
+      const kind = reason?.kind ?? reason ?? "?";
+      out(C.dim(`── turn ${data?.turn} end (${kind}) ──`));
+      if (kind === "error" && reason?.error) {
+        const err = reason.error;
+        out(C.red(`✖ ${sanitizeLine(err.message ?? "unknown error")}`) +
+            C.gray(`  [${sanitizeLine(String(err.code ?? "?"))}${err.status ? " " + err.status : ""}]`));
+        const hint = turnErrorHint(String(err.message ?? ""));
+        if (hint) out(C.yellow(`  ↳ ${hint}`));
+      }
       break;
+    }
     case "step/start":
     case "step/end":
       break; // noise at this zoom level
@@ -284,7 +318,13 @@ function handleFrame(f, rpcId) {
       if (mine && f.title) { st.title = f.title; refreshTitle(); }
       break;
     case "stream/error":
-      if (mine) { endStream(); out(C.red(`✖ stream error: ${trim1(String(f.message ?? JSON.stringify(f)), 300)}`)); }
+      if (mine) {
+        endStream();
+        const msg = String(f.message ?? JSON.stringify(f));
+        out(C.red(`✖ stream error: ${trim1(msg, 300)}`));
+        const hint = turnErrorHint(msg);
+        if (hint) out(C.yellow(`  ↳ ${hint}`));
+      }
       break;
     // session/subscribed, session/queue, session/jobs, session/projection: quiet at this zoom.
   }
@@ -311,8 +351,26 @@ async function attachTo(sid, items) {
   try {
     const v = await rpc("session.models", { sessionId: sid });
     const c = v.current ?? {};
+    // `routable` only says the provider ROUTE is alive — it stays true while the
+    // selected model is absent from this host's catalog. dsh keeps ONE global
+    // default in ~/.dsh/settings.yaml shared by every host, so selecting a model
+    // on one lane silently becomes the default on all of them. Compare against
+    // the catalog we can actually see.
+    const catalog = (v.groups ?? []).flatMap((g) => (g.models ?? []).map((m) => m.id));
+    const served = catalog.length === 0 || catalog.includes(c.model);
     out(C.gray(`  ${sanitizeLine(`${c.provider}/${c.model}`)}${c.reasoningEffort ? " · effort " + sanitizeLine(c.reasoningEffort) : ""}`) +
-        (v.routable ? "" : C.red("  ⚠ model not routable on this host — press m")));
+        (served ? "" : C.red("  ⚠ not served here")));
+    if (!served) {
+      out(C.gray(`  ↳ this lane serves ${catalog.map(sanitizeLine).join(", ")}`));
+      // The model is a single global setting shared by every lane, so it is
+      // routinely "somewhere else" rather than wrong. Say where.
+      findLaneFor(c.model).then((lane) => {
+        if (lane) out(C.cyan(`  ↳ ${sanitizeLine(c.model)} lives on ${lane.host} — podsh attach --model ${sanitizeLine(c.model)}`));
+        else out(C.yellow(`  ↳ press m to pick one this lane serves`));
+      }).catch(() => {});
+    }
+    else if (!v.routable)
+      out(C.red("  ⚠ provider route is down on this host — press m"));
   } catch {}
   try {
     const h = await rpc("session.history", { sessionId: sid, maxMessages: 10 });
@@ -500,6 +558,15 @@ function cancelTurn() {
 
 // ---------- main ----------
 async function main() {
+  if (opt.model) {
+    const lane = await findLaneFor(opt.model);
+    if (!lane) {
+      console.error(`podsh: no live lane serves "${opt.model}" — see \`podsh lanes\``);
+      process.exit(1);
+    }
+    if (lane.host !== opt.host) out(C.gray(`${opt.model} lives on ${lane.host} — attaching there`));
+    opt.host = lane.host;
+  }
   if (!(await ensureHost())) return; // file-tail took over
   const { sid: defSid, items } = await pickDefaultSession();
   const sid = opt.session

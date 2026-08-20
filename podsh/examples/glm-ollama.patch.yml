@@ -1,0 +1,23 @@
+# podsh overlay: drive the dsh host with GLM-5.2 via an Ollama endpoint.
+# A worked example of pointing dsh at a model from a different vendor entirely
+# (Zhipu, not DeepSeek) — verified end to end including tool calls.
+#
+#   export DEEPSEEK_BASE_URL=http://127.0.0.1:11434/v1
+#   export PODSH_PATCH=$PWD/podsh/examples/glm-ollama.patch.yml
+#   podsh web
+#
+# Ollama caps output at 65536; dsh's adapter default (256000) is a hard 400.
+- id: llm-deepseek
+  name: '@deepseek-ai/dsh-llm-deepseek'
+  config:
+    maxTokens: 65536
+    models:
+      - id: glm-5.2:cloud
+        name: GLM-5.2 (Ollama)
+        contextWindow: 200000
+        maxTokens: 65536
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: deepseek-official
+    model: glm-5.2:cloud
