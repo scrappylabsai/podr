@@ -119,6 +119,15 @@ Ollama Cloud rejects dsh's default 256k max-token request with a hard 400.
   the rc.6 adapter offers `off/high/max`, rc.8 offers `off/low/high/max`. Ollama's own API
   accepts `high/medium/low/none`, so `max` against an Ollama lane is a hard 400. On cloud
   lanes stick to `low`/`high`.
+- **Panes inherit the herdr *server's* environment, not your shell's.** If you set
+  `EVOLV_HOST` (or any env) in a launcher, an already-running herdr server won't have it —
+  relaunching the client connects back to the same server. Kill the server first, then start
+  fresh. This is how you point one podr's panes at a specific dsh lane:
+
+  ```bash
+  export EVOLV_HOST=127.0.0.1:3081   # then start herdr; panes get it
+  evolv attach                        # no --host needed
+  ```
 - **Model selection is sticky.** A new session inherits the last selection, which can beat
   your overlay's default — pass `evolv send --model …:cloud --effort high` explicitly when
   lane-hopping.
