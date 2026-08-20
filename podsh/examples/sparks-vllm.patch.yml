@@ -1,0 +1,15 @@
+# podsh overlay: a vLLM endpoint that serves exactly one model.
+# dsh's DEFAULT catalog is advisory — it advertises V4 Flash *and* V4 Pro
+# regardless of what your endpoint actually has, so an unlisted model looks
+# selectable and 404s at turn time. Declare what the endpoint really serves.
+- id: llm-deepseek
+  name: '@deepseek-ai/dsh-llm-deepseek'
+  config:
+    maxTokens: 65536
+    models:
+      - { id: deepseek-v4-flash, name: DeepSeek-V4-Flash (vLLM), contextWindow: 1000000, maxTokens: 65536 }
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: deepseek-official
+    model: deepseek-v4-flash

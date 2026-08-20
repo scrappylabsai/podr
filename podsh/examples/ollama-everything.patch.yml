@@ -1,0 +1,43 @@
+# podsh overlay: ONE host, every model your Ollama endpoint can actually reach.
+#
+#   export DEEPSEEK_BASE_URL=http://127.0.0.1:11434/v1
+#   export PODSH_PATCH=$PWD/podsh/examples/ollama-everything.patch.yml
+#   podsh web --port 3092
+#
+# Why this exists: a dsh host is one endpoint — the llm-deepseek plugin registers
+# the fixed provider route "deepseek-official", so you cannot mount it twice with
+# different baseURLs. But ONE endpoint can front many models, and Ollama resolves
+# :cloud models on demand, so they need not be pulled to appear here.
+#
+# EVERY MODEL BELOW WAS PROBED against a live endpoint before being listed. Do the
+# same when you edit this: dsh's own default catalog is advisory (it advertises
+# V4 Flash *and* V4 Pro whatever your endpoint has), and an unreachable model looks
+# perfectly selectable right up until the turn 404s.
+#
+# Two traps worth knowing:
+#   - cloud models need the `:cloud` tag. The library page lists `qwen3.5:397b`,
+#     but the resolvable id is `qwen3.5:cloud`. Bare names mostly do not work.
+#   - some library entries do not resolve at all (mistral-large-3, gpt-oss were
+#     both "not found" on 2026-08-19), and some bill extra usage rather than plan
+#     usage (kimi-k3 → "extra usage balance is empty"). Probe, do not assume.
+#
+# Ollama caps output at 65536; dsh's 256000 default is a hard 400.
+- id: llm-deepseek
+  name: '@deepseek-ai/dsh-llm-deepseek'
+  config:
+    maxTokens: 65536
+    models:
+      - { id: deepseek-v4-flash:cloud, name: DeepSeek-V4-Flash, contextWindow: 1000000, maxTokens: 65536 }
+      - { id: deepseek-v4-pro:cloud,   name: DeepSeek-V4-Pro,   contextWindow: 524288,  maxTokens: 65536 }
+      - { id: glm-5.2:cloud,           name: GLM-5.2,           contextWindow: 200000,  maxTokens: 65536 }
+      - { id: glm-5.1:cloud,           name: GLM-5.1,           contextWindow: 200000,  maxTokens: 65536 }
+      - { id: qwen3.5:cloud,           name: Qwen3.5,           contextWindow: 262144,  maxTokens: 65536 }
+      - { id: minimax-m3:cloud,        name: MiniMax-M3,        contextWindow: 200000,  maxTokens: 65536 }
+      - { id: nemotron-3-super:cloud,  name: Nemotron-3-Super,  contextWindow: 131072,  maxTokens: 65536 }
+      - { id: kimi-k2.7-code:cloud,    name: Kimi-K2.7-Code,    contextWindow: 262144,  maxTokens: 65536 }
+      - { id: gemma4:e4b,              name: Gemma4-E4B (local), contextWindow: 131072, maxTokens: 32768 }
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: deepseek-official
+    model: deepseek-v4-flash:cloud

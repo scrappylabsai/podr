@@ -141,6 +141,33 @@ podsh attach     # spawn-on-demand inherits the overlay
 See `podsh/examples/ollama-cloud.patch.yml` — it also fixes the trap where
 Ollama Cloud rejects dsh's default 256k max-token request with a hard 400.
 
+### One host, many models
+
+A dsh host is one *endpoint* — the llm-deepseek plugin registers the fixed provider
+route `deepseek-official`, so you cannot mount it twice with different `baseURL`s.
+But one endpoint can front many models. Point a host at Ollama and declare a catalog
+and the web UI's picker shows them all:
+
+```bash
+export DEEPSEEK_BASE_URL=http://127.0.0.1:11434/v1
+export PODSH_PATCH=$PWD/podsh/examples/ollama-everything.patch.yml
+podsh web --port 3092          # picker now offers DeepSeek, GLM, Qwen, MiniMax, …
+```
+
+**🔴 dsh's default catalog is advisory, not real.** With no overlay it advertises
+`deepseek-v4-flash` *and* `deepseek-v4-pro` no matter what your endpoint serves — so
+against a vLLM hosting only Flash, Pro looks selectable and 404s at turn time. Declare
+what your endpoint actually has (`podsh/examples/sparks-vllm.patch.yml` is the
+one-model case).
+
+**Probe before you list.** On Ollama, cloud models need the `:cloud` tag — the library
+page says `qwen3.5:397b`, the resolvable id is `qwen3.5:cloud`. Some library entries do
+not resolve at all, and some bill extra usage instead of plan usage. Every model in the
+shipped example was probed against a live endpoint first.
+
+Endpoints that cannot share a host (a local vLLM plus Ollama, say) stay separate lanes —
+that is what `podsh lanes` and `--model` routing are for.
+
 ### Non-DeepSeek models
 
 They work. `podsh/examples/qwen-vllm.patch.yml` is a tested overlay for Qwen3.8-27B on
