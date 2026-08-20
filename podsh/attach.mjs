@@ -342,36 +342,32 @@ async function showHeader(item) {
   refreshTitle();
 }
 
+let lastModelLine = "";
+async function showModel(sid, { quiet = false } = {}) {
+  const v = await rpc("session.models", { sessionId: sid });
+  const c = v.current ?? {};
+  const catalog = (v.groups ?? []).flatMap((g) => (g.models ?? []).map((m) => m.id));
+  const served = catalog.length === 0 || catalog.includes(c.model);
+  const line = `${c.provider}/${c.model}${c.reasoningEffort ? " · effort " + c.reasoningEffort : ""}`;
+  if (quiet && line === lastModelLine) return;
+  lastModelLine = line;
+  out((quiet ? C.cyan("↻ model: ") : C.gray("  ")) + C.gray(sanitizeLine(line)) + (served ? "" : C.red("  ⚠ not served here")));
+  if (!served) {
+    out(C.gray(`  ↳ this lane serves ${catalog.map(sanitizeLine).join(", ")}`));
+    findLaneFor(c.model).then((lane) => {
+      if (lane) out(C.cyan(`  ↳ ${sanitizeLine(c.model)} lives on ${lane.host} — podsh attach --model ${sanitizeLine(c.model)}`));
+      else out(C.yellow(`  ↳ press m to pick one this lane serves`));
+    }).catch(() => {});
+  } else if (!v.routable) out(C.red("  ⚠ provider route is down on this host — press m"));
+}
+
 async function attachTo(sid, items) {
   endStream();
   st.streamedStep = null;
   st.sid = sid;
   const item = (items ?? (await rpc("session.list")).items).find((i) => i.sessionId === sid);
   await showHeader(item);
-  try {
-    const v = await rpc("session.models", { sessionId: sid });
-    const c = v.current ?? {};
-    // `routable` only says the provider ROUTE is alive — it stays true while the
-    // selected model is absent from this host's catalog. dsh keeps ONE global
-    // default in ~/.dsh/settings.yaml shared by every host, so selecting a model
-    // on one lane silently becomes the default on all of them. Compare against
-    // the catalog we can actually see.
-    const catalog = (v.groups ?? []).flatMap((g) => (g.models ?? []).map((m) => m.id));
-    const served = catalog.length === 0 || catalog.includes(c.model);
-    out(C.gray(`  ${sanitizeLine(`${c.provider}/${c.model}`)}${c.reasoningEffort ? " · effort " + sanitizeLine(c.reasoningEffort) : ""}`) +
-        (served ? "" : C.red("  ⚠ not served here")));
-    if (!served) {
-      out(C.gray(`  ↳ this lane serves ${catalog.map(sanitizeLine).join(", ")}`));
-      // The model is a single global setting shared by every lane, so it is
-      // routinely "somewhere else" rather than wrong. Say where.
-      findLaneFor(c.model).then((lane) => {
-        if (lane) out(C.cyan(`  ↳ ${sanitizeLine(c.model)} lives on ${lane.host} — podsh attach --model ${sanitizeLine(c.model)}`));
-        else out(C.yellow(`  ↳ press m to pick one this lane serves`));
-      }).catch(() => {});
-    }
-    else if (!v.routable)
-      out(C.red("  ⚠ provider route is down on this host — press m"));
-  } catch {}
+  try { await showModel(sid); } catch {}
   try {
     const h = await rpc("session.history", { sessionId: sid, maxMessages: 10 });
     for (const e of h.events ?? []) renderEvent(e.event, e.view, false);
@@ -628,6 +624,25 @@ async function main() {
     ws.addEventListener("error", () => {}); // close handler owns retry
   };
   connectWs();
+
+  // The selected model is a global settings DOCUMENT, not session state: changing
+  // it (here, in the browser, or on another lane) fires settings/document-updated
+  // on the host stream. Without this the pane's model line silently goes stale.
+  const connectHostWs = () => {
+    const hws = new WebSocket(`ws://${opt.host}/api/events.host`);
+    hws.addEventListener("message", (m) => {
+      let env; try { env = JSON.parse(m.data); } catch { return; }
+      const f = env.payload;
+      if (f?.type === "host/remote-event" && f.event === "settings/document-updated" && st.sid) {
+        showModel(st.sid, { quiet: true }).catch(() => {});
+      }
+    });
+    hws.addEventListener("close", () => {
+      if (!st.quitting) setTimeout(connectHostWs, 5000);
+    });
+    hws.addEventListener("error", () => {});
+  };
+  connectHostWs();
 }
 
 function quit(code) {

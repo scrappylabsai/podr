@@ -111,6 +111,14 @@ lanes (scanned 127.0.0.1:3080-3099):
 
 Set `PODSH_LANES="host:port,host:port"` to name them explicitly instead of scanning.
 
+**Changing the model is a global event, not a session one.** The selection lives in
+`~/.dsh/settings.yaml` as a versioned settings *document*; changing it anywhere fires
+`settings/document-updated` on `/api/events.host`, and clients refetch. So a flip in the
+browser shows up in the pane and vice versa — but it also changes the default for every
+session on every lane. And nothing validates the choice against the host you are on:
+selecting a model this lane cannot serve is *accepted*, stays `routable: true`, and fails
+as a 404 on the next turn. podsh surfaces that error and names the lane that has the model.
+
 **Know this about multi-lane setups:** every host shares `~/.dsh`, so sessions are
 visible from all of them — but the selected model is a *single global setting* in
 `~/.dsh/settings.yaml`, and `selectModel` writes to it. Selecting a model on one
