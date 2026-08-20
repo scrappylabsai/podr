@@ -1,84 +1,178 @@
-# herdr
-
-
-<p align="center">
-  <img src="assets/logo.png" alt="herdr" width="100" />
-</p>
-
-<p align="center">
-  <a href="https://herdr.dev">herdr.dev</a> · <a href="#安装">安装</a> · <a href="https://herdr.dev/zh-cn/docs/quick-start/">快速开始</a> · <a href="https://herdr.dev/zh-cn/docs/">文档</a></p>
+# podr 🐋
 
 <p align="center">
   <a href="README.md">English</a> · 简体中文
 </p>
 
-<p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-666666?labelColor=333333" alt="Apache 2.0 license" /></a>
-  <a href="https://github.com/herdrdev/herdr/releases"><img src="https://img.shields.io/github/downloads/herdrdev/herdr/total?labelColor=333333&color=666666" alt="total GitHub release downloads" /></a>
-  <a href="https://github.com/herdrdev/herdr/stargazers"><img src="https://img.shields.io/github/stars/herdrdev/herdr?labelColor=333333&color=666666&logo=github" alt="GitHub stars" /></a>
-  <a href="https://github.com/herdrdev/herdr/releases/latest"><img src="https://img.shields.io/github/v/release/herdrdev/herdr?label=release&labelColor=333333&color=666666" alt="latest stable release" /></a>
-  <a href="https://formulae.brew.sh/formula/herdr"><img src="https://img.shields.io/homebrew/v/herdr?label=homebrew&labelColor=333333&color=666666" alt="Homebrew version" /></a>
-  <a href="https://x.com/herdrdev"><img src="https://img.shields.io/badge/follow-%40herdrdev-000000?logo=x&logoColor=white" alt="follow @herdrdev on X" /></a>
-</p>
+> **herdr 放牧 agent，podr 放牧鲸鱼——顺带把其他的也一起牧了。**
 
----
+这是 [herdr](https://github.com/herdrdev/herdr) 的一个 fork，把 DeepSeek 这套工具
+链接成了「herd」里的一等公民——因为一群鲸鱼（pod）本来就是一个 herd。upstream herdr
+支持的每一个 agent（claude、codex、gemini 等二十多个）在这里完全照旧，podr 只是不再
+把鲸鱼关在门外。
 
-https://github.com/user-attachments/assets/043ec09f-4bdd-41d5-aee0-8fda6b83e267
+**用 dsh 不该像二等公民。它是深海之王。**
 
-**智能体复用器，住在你的终端里。**
+如果你在跑 **reasonix**（DeepSeek 原生语音 agent），多半也会想跑 **dsh**
+（DeepSeek Harness）。两个都跑起来之后，你会希望终端复用器能真正*看见*它们：
+哪个窗格在干活、哪个卡在审批上、哪个在等你。这就是 podr。
 
-- **每个智能体一目了然**——`blocked`、`working`、`done`。真实的终端视图，而不是包装过的转述。
-- **分离后智能体继续运行**——从任意终端重新连接，或通过 ssh。会话在重启后依然保留。
-- **智能体也能使用 herdr**——纯 socket api：智能体可以创建窗格、读取输出、互相等待。[智能体技能 →](https://herdr.dev/zh-cn/docs/agent-skill/)
-- **键盘和鼠标都是一等公民**——tmux 风格的前缀键，*以及*点击、拖动、分割。按当下的场景选择，而不是被工具锁死。
-- **插件**——扩展窗格和工作流。[浏览插件市场 →](https://herdr.dev/plugins/)
-- **单个 rust 二进制，没有 electron**——运行在你已经在用的任何终端里。
+## pod 里有什么
 
----
+| 组成 | 作用 |
+|---|---|
+| **herdr fork** | upstream herdr 的全部功能，外加检测注册表里的两个 agent |
+| **`Agent::Reasonix`** | 跟踪 reasonix 窗格的 working/blocked 状态（审批面板、提问卡片、回合/工具 spinner，规则对多语言安全） |
+| **`Agent::Dsh`** | 通过下面的 `podsh attach` 把 dsh 会话纳入 herd |
+| **`podsh/`** | dsh web host 的终端界面：`attach`（实时跟随 + 驱动）、`send`（在任意 shell 里编排会话）、一个轻量启动器 |
 
-## 安装
+## 关键点：会「主动汇报」的 agent
 
-```bash
-curl -fsSL https://herdr.dev/install.sh | sh
+复用器里其他所有 agent 都靠**扫屏**来跟踪——几百条正则去匹配终端网格，agent 的
+界面一改就失效。
+
+podr 的 `dsh` agent 把这件事反了过来。dsh 的客户端本质是「React 跑在协议之上」
+（HTTP RPC + 一条 WebSocket 事件流），所以 `podsh attach` 只是**另一个客户端**；
+而既然这个客户端是我们自己写的，它就可以**主动广播状态**，不需要被逆向：
+
+```
+✳ dsh · my session      空闲
+⠿ dsh · my session      工作中（回合进行中）
+⏸ dsh · approval        阻塞（在等你）
 ```
 
-或者 `brew install herdr` · `mise use -g herdr` · Windows 测试版：`powershell -ExecutionPolicy Bypass -c "irm https://herdr.dev/install.ps1 | iex"` · [二进制文件](https://github.com/herdrdev/herdr/releases)
+三条 OSC 标题规则，不匹配任何屏幕内容。它不会「漂移」，因为读规则的 manifest 和发
+标题的客户端是同一份约定（`src/detect/manifests/dsh.toml`）。
 
-然后在工作所在的目录启动它：
+## 快速开始
 
 ```bash
-herdr
+# 1. 构建 fork（vendored 终端内核需要 zig）
+ZIG=/path/to/zig LIBGHOSTTY_VT_SIMD=false cargo build --release
+
+# 2. 把 podsh 放进 PATH，并指向你的模型端点
+#    （podsh 会检查 node >= 22.15——这是 dsh 的硬性下限——不满足会直接告诉你）
+export PATH="$PWD/podsh:$PATH"
+export DEEPSEEK_BASE_URL=http://localhost:8000/v1   # 任何 OpenAI 兼容端点
+export DEEPSEEK_API_KEY=local
+
+# 3. 启动——./podr 会在自己的具名 herdr 会话里跑这个 fork，
+#    podsh 已经在 PATH 里；然后开一个窗格：
+./podr
+podsh attach
 ```
 
-运行你的智能体、分割窗格，然后安心离开。`ctrl+b q` 分离，`herdr` 重新连接。[快速开始 →](https://herdr.dev/zh-cn/docs/quick-start/)
+`./podr` 的 socket 和状态与你已有的 herdr 完全隔离，所以可以放心试用而不影响现有环境。
 
-## 文档
+`podsh attach` 会找到正在运行的 dsh web host（或启动一个），实时跟随最近的会话，并加入 herd：
 
-所有文档都在 [herdr.dev/docs](https://herdr.dev/zh-cn/docs/)：[快速开始](https://herdr.dev/zh-cn/docs/quick-start/) · [核心概念](https://herdr.dev/zh-cn/docs/concepts/) · [受支持的智能体](https://herdr.dev/zh-cn/docs/agents/) · [键盘](https://herdr.dev/zh-cn/docs/keyboard/) · [配置](https://herdr.dev/zh-cn/docs/configuration/) · [会话状态](https://herdr.dev/zh-cn/docs/session-state/) · [远程访问](https://herdr.dev/zh-cn/docs/persistence-remote/) · [集成](https://herdr.dev/zh-cn/docs/integrations/) · [插件](https://herdr.dev/zh-cn/docs/plugins/) · [socket api](https://herdr.dev/zh-cn/docs/socket-api/)
+- `l` — 在会话间切换（无需重连；事件 mux 本来就带着全部会话）
+- `m` — **模型 + 思考强度选择器**
+- `i` — 排入一条 prompt · `s` — **介入正在进行的回合** · `c` — 取消
+- `y` / `n` — 在窗格里回应工具审批（浏览器同时有效；谁先回应谁生效，另一端自动清除）
+- `1-9` — 回答简单提问 · `/…` — host 命令（`/permission`、`/plan` 等）
+
+浏览器标签页和终端窗格是**同一个会话的两张面孔**——host 会把事件扇出给每一个已连接的
+客户端，会话本身没有归属权。
+
+```bash
+# 在任意 shell 里编排：
+podsh send --list
+podsh send --session <id> --watch "跑一遍测试并总结失败项"
+podsh send --steer "停，目录不对，用 ./services"
+podsh send --models                     # 模型列表 + 当前选择 + 可路由性
+podsh send --effort max                 # 只调思考强度，保持模型不变
+```
+
+## 通道（lane）：一个端点一个 host
+
+一个 dsh host **就是**一条通道：一个端点、一份模型列表。你可以同时跑好几个（每个
+provider 一个），podsh 会把模型解析到真正提供它的那条通道上——于是你只需要关心
+「用哪个模型」，而不是「哪个端口」：
+
+```bash
+podsh lanes                          # 哪些通道在线，各自提供什么
+podsh attach --model glm-5.2:cloud   # 自动连到有这个模型的通道
+podsh send   --model qwen3.8-27b …   # 自动路由过去
+```
+
+用 `PODSH_LANES="host:port,host:port"` 显式指定，否则默认扫描 `127.0.0.1:3080-3099`。
+
+## 我们踩过的坑，你就不必再踩
+
+- **首次启动很慢而且完全没有输出。** 第一次 `podsh web`（或第一次由 attach 拉起的
+  host）要安装 dsh 的 web profile，几分钟没有任何提示。它在正常工作，等着就好。
+  **不要同时启动两个首次安装**（npm 缓存锁会损坏，报 `ECOMPROMISED`）。
+- **🔴 版本 pin 只 pin 了一半。** `DSH_PIN` 固定的是 **launcher**
+  （通过 npx 拉的 `@deepseek-ai/dsh`），但 launcher 随后安装的 **profile** 里那些
+  插件包是在**首次启动时**解析的——也就是说它们会浮动到当时的最新版。同一个
+  `DSH_PIN=0.1.0-rc.6`，实测两台机器分别得到 rc.6 和 **rc.8**。用这个查你自己的：
+
+  ```bash
+  ls ~/.dsh/profiles/*/node_modules/@deepseek-ai/dsh-base/package.json
+  ```
+
+  两边都能跑，但它们并不是同一套安装。需要可复现性就自己快照 `~/.dsh/profiles/`，
+  别指望 pin 帮你做到。
+- **🔴 思考强度（reasoning effort）的取值各层并不一致，而且没人做跨层校验。**
+
+  | 层 | 接受的取值 |
+  |---|---|
+  | dsh adapter（选择器里显示的） | `off` `high` `max`（rc.6）/ 另加 `low`（rc.8） |
+  | Ollama API | `high` `medium` `low` `none` |
+  | vLLM（Qwen3.8） | `xhigh` `medium` `low` |
+
+  adapter 拿**它自己**的列表校验你的选择，后端拿**它自己**的列表拒绝——两者的交集
+  完全可能为空。于是一个看起来完全合法的取值，会在真正发起回合时直接 400。
+- **🔴 默认模型列表是「参考性」的，不是真实的。** 不加 overlay 时，无论你的端点实际
+  提供什么，它都会同时列出 `deepseek-v4-flash` 和 `deepseek-v4-pro`。所以在一个只
+  提供 Flash 的 vLLM 上，Pro 看起来完全可选，然后在回合时 404。请声明端点真正提供的
+  东西（`podsh/examples/sparks-vllm.patch.yml` 是单模型的例子）。
+- **🔴 用 Ollama 时，列进去的每个云端模型都要 `ollama pull`。** web UI 会拿你声明的
+  列表和端点**实际列出**的模型取交集，而 Ollama 对 `:cloud` 模型是按需拉起、注册前
+  并不列出。结果就是：一个没注册的云端模型通过 API 完全能用，但在浏览器选择器里
+  **根本看不见**。
+
+  ```bash
+  ollama pull glm-5.2:cloud      # 只写 manifest——不下权重，秒完成，不占磁盘
+  ```
+- **标注模型在哪儿跑。** 选择器只显示 display name，所以「本机 GPU 上的某模型」和
+  「云端的同名模型」看起来一模一样——当其中一个涉及隐私、另一个不涉及时，这很致命。
+  示例配置里的写法：`☁ cloud` 表示会离开你的机器，`⌂ sparks` 表示跑在你自己的硬件上。
+- **切换模型是一个全局事件，而不是会话级的。** 这个选择存在
+  `~/.dsh/settings.yaml` 里，是一份带版本号的 settings *document*；在任何地方改它都会
+  在 `/api/events.host` 上触发 `settings/document-updated`，各客户端随之重新拉取。所以
+  浏览器里改了，窗格里会同步——但它同时也改掉了**每条通道上新会话**的默认值。而且没有
+  任何东西会校验这个选择对当前 host 是否有效：选一个本通道提供不了的模型是会被*接受*的，
+  `routable` 依旧是 `true`，然后在下一个回合 404。
+- **窗格继承的是 herdr *server* 的环境变量，不是你 shell 的。** 如果你在启动脚本里设了
+  `PODSH_HOST`，而 herdr server 已经在跑，它并不会拿到——重启客户端只会连回同一个
+  server。要先把 server 停掉。隔离请用 herdr 自带的 `--session <name>`（`./podr` 就是
+  这么做的），**不要**去覆盖 `XDG_CONFIG_HOME`/`XDG_STATE_HOME`——那是全局的，会把窗格里
+  的 mise/direnv 之类全部搞坏。
+
+## 为什么是 fork
+
+herdr 的贡献是由其维护者主导实现的，非邀请的实现型 PR 会按其策略被自动关闭——这是他们
+明确写在文档里的选择，这里只是陈述，不是抱怨。reasonix 的检测支持我们已经通过他们的
+discussions 提交过（#954，目前仍开放）。所以 reasonix 和 dsh 的 agent 支持就先放在这个
+fork 里。它通过 merge 跟随 upstream，许可证同为 Apache-2.0，检测 manifest 也沿用他们的
+格式——哪天他们想要其中任何一个，复制粘贴即可。
+
+## 状态——请务必读
+
+- **dsh 还在 1.0 之前，且在快速变动。** 这里的一切都是针对 `podsh/podsh` 里那个
+  `DSH_PIN` 验证过的。不要浮动到 latest；要升就有意识地升，然后重测。
+- 客户端依赖的协议细节来自 dsh 自带的 contract 层，并经过实机验证；upstream 已经预告
+  会有破坏性变更。
+- 通过 merge 跟随 upstream herdr。同样的构建方式，同样的许可证（Apache-2.0）。
 
 ## 致谢
 
-<a href="https://terminaltrove.com/"><img src="assets/sponsors/terminal-trove.png" alt="Terminal Trove" width="200" /></a>
+- [herdr](https://github.com/herdrdev/herdr) —— upstream 的那个 herd。
+- [Ahmed Al Busaidy](https://github.com/ahmedalbusaidy) —— 本 fork 所基于的 reasonix 检测集成。
+- [DeepSeek](https://github.com/deepseek-ai) —— dsh，以及鲸鱼本身。
+- upstream herdr 的 README：[README.upstream.md](README.upstream.md) ·
+  [简体中文版](README.upstream.zh-CN.md)。
 
-[Terminal Trove](https://terminaltrove.com/) 以及 [SPONSORS.md](./SPONSORS.md) 中列出的每一位支持者——谢谢 🐑
-
-企业/合作：hey@herdr.dev
-
-## 智能体须知
-
-如果你是协助本仓库的 AI 智能体：在改动代码前阅读 [`AGENTS.md`](./AGENTS.md)，在创建 issue 或 PR 前阅读 [`CONTRIBUTING.md`](./CONTRIBUTING.md)。
-
-## 开发
-
-```bash
-git clone https://github.com/herdrdev/herdr
-cd herdr
-cargo build --release
-
-just test        # 单元测试
-just check       # 格式检查、测试和维护性检查
-```
-
-## 许可证
-
-herdr 基于 [Apache License 2.0](LICENSE) 许可证发布。
+🐋 *ScrappyLabs — bring your own AI.*

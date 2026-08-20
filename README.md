@@ -1,5 +1,9 @@
 # podr 🐋
 
+<p align="center">
+  English · <a href="README.zh-CN.md">简体中文</a>
+</p>
+
 > **herdr herds agents. podr herds whales — and everything else too.**
 
 A [herdr](https://github.com/herdrdev/herdr) fork where the DeepSeek stack is
@@ -272,6 +276,6 @@ about which model you are running.
 - [Ahmed Al Busaidy](https://github.com/ahmedalbusaidy) — the reasonix
   detection integration this fork builds on.
 - [DeepSeek](https://github.com/deepseek-ai) — dsh and the whales themselves.
-- Upstream herdr README: [README.upstream.md](README.upstream.md).
+- Upstream herdr README: [README.upstream.md](README.upstream.md) · [简体中文](README.upstream.zh-CN.md).
 
 🐋 *ScrappyLabs — bring your own AI.*
