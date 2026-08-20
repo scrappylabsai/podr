@@ -57,6 +57,30 @@ case "${1:-}" in
     ;;
   web)
     shift
+    # Work out which port we are about to claim so we can say something useful
+    # instead of letting node throw an EADDRINUSE stack at the user.
+    PORT=3080
+    for ((i=1; i<=$#; i++)); do
+      case "${!i}" in
+        --port) j=$((i+1)); PORT="${!j:-3080}" ;;
+        --port=*) PORT="${!i#--port=}" ;;
+      esac
+    done
+    if curl -sf -m 2 -X POST "http://127.0.0.1:${PORT}/api/session.list" \
+         -H 'content-type: application/json' \
+         -d '{"type":"client-request","rpcId":"p","method":"session.list","payload":{}}' >/dev/null 2>&1; then
+      echo "podsh: a dsh host is already serving http://127.0.0.1:${PORT}" >&2
+      echo "       attach to it:   podsh attach --host 127.0.0.1:${PORT}" >&2
+      echo "       or start another lane on a free port:  podsh web --port $((PORT+1))" >&2
+      exit 1
+    fi
+    if (exec 3<>/dev/tcp/127.0.0.1/"$PORT") 2>/dev/null; then
+      echo "podsh: port ${PORT} is in use by something that is not a dsh host." >&2
+      echo "       pick another:  podsh web --port $((PORT+1))" >&2
+      exit 1
+    fi
+    echo "podsh: starting dsh web on http://127.0.0.1:${PORT}" >&2
+    echo "podsh: first boot installs the dsh profile — minutes of silence is normal" >&2
     exec npx -y "@deepseek-ai/dsh@${DSH_PIN}" --profile web ${PATCHES[@]+"${PATCHES[@]}"} "$@"
     ;;
   ""|--help|-h)
