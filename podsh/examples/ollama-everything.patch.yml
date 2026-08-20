@@ -25,7 +25,6 @@
 # on a cloud endpoint and the same model on your own GPU are indistinguishable —
 # which matters when one of them is private and the other is not. Convention here:
 #   ☁ cloud   leaves your machine
-#   ⌂ on-box  served locally by this endpoint
 #   ⌂ <host>  served by a machine you run (see sparks-vllm.patch.yml)
 #
 # Ollama caps output at 65536; dsh's 256000 default is a hard 400.
@@ -42,7 +41,6 @@
       - { id: minimax-m3:cloud,        name: MiniMax-M3 ☁ cloud,        contextWindow: 200000,  maxTokens: 65536 }
       - { id: nemotron-3-super:cloud,  name: Nemotron-3-Super ☁ cloud,  contextWindow: 131072,  maxTokens: 65536 }
       - { id: kimi-k2.7-code:cloud,    name: Kimi-K2.7-Code ☁ cloud,    contextWindow: 262144,  maxTokens: 65536 }
-      - { id: gemma4:e4b,              name: Gemma4-E4B ⌂ on-box, contextWindow: 131072, maxTokens: 32768 }
 - id: agent-default-model
   name: '@deepseek-ai/dsh-agent-default-model'
   config:
