@@ -160,6 +160,18 @@ against a vLLM hosting only Flash, Pro looks selectable and 404s at turn time. D
 what your endpoint actually has (`podsh/examples/sparks-vllm.patch.yml` is the
 one-model case).
 
+**🔴 On Ollama, `ollama pull` every cloud model you list.** The web UI filters your
+declared catalog against what the endpoint actually *lists*, and Ollama runs `:cloud`
+models on demand without listing them until they are registered. So an unregistered
+cloud model works fine through the API and is **invisible in the browser's picker**:
+
+```bash
+ollama pull glm-5.2:cloud      # manifest only — no weights, instant, no disk
+```
+
+(Registering is not downloading: a cloud pull writes a manifest and the model still
+runs remotely.)
+
 **Name the locality.** The picker shows only the display *name*, so a model served
 from your own GPU and the same model served from a cloud endpoint are
 indistinguishable — which matters a lot when one of them is private and the other
