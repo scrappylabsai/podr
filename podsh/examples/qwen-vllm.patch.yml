@@ -1,0 +1,23 @@
+# podsh overlay: drive the dsh host with a NON-DeepSeek model served
+# OpenAI-compatible (here: Qwen3.8-27B on vLLM).
+#
+#   export DEEPSEEK_BASE_URL=http://<vllm-host>:8010/v1
+#   export PODSH_PATCH=$PWD/podsh/examples/qwen-vllm.patch.yml
+#   podsh web
+#
+# The provider route stays `deepseek-official` — that is dsh's adapter id, not a
+# claim about the model. Only the model list and defaults change.
+- id: llm-deepseek
+  name: '@deepseek-ai/dsh-llm-deepseek'
+  config:
+    maxTokens: 32768
+    models:
+      - id: qwen3.8-27b
+        name: Qwen3.8-27B (vLLM)
+        contextWindow: 262144
+        maxTokens: 32768
+- id: agent-default-model
+  name: '@deepseek-ai/dsh-agent-default-model'
+  config:
+    provider: deepseek-official
+    model: qwen3.8-27b

@@ -103,6 +103,26 @@ podsh attach     # spawn-on-demand inherits the overlay
 See `podsh/examples/ollama-cloud.patch.yml` — it also fixes the trap where
 Ollama Cloud rejects dsh's default 256k max-token request with a hard 400.
 
+### Non-DeepSeek models
+
+They work. `podsh/examples/qwen-vllm.patch.yml` is a tested overlay for Qwen3.8-27B on
+vLLM — verified end to end including **tool calls** (the agent loop runs: real `bash`
+invocation, real result). Two things to know:
+
+```bash
+export DEEPSEEK_BASE_URL=http://<vllm-host>:8010/v1
+export PODSH_PATCH=$PWD/podsh/examples/qwen-vllm.patch.yml
+podsh send --model deepseek-official/<your-model> --effort off   # ← set both, explicitly
+```
+
+1. **Use `--effort off`** — see the effort table below; the adapter's values and your
+   backend's values may not overlap at all.
+2. **Select the model explicitly on first use.** A new session inherits the last global
+   selection, which can beat your overlay's default and 404 against the new endpoint.
+
+The provider route stays `deepseek-official` — that is dsh's adapter id, not a claim
+about which model you are running.
+
 ## Gotchas we hit so you don't
 
 - **First boot is silent and slow.** The first `podsh web` (or the first attach that
@@ -121,10 +141,18 @@ Ollama Cloud rejects dsh's default 256k max-token request with a hard 400.
   Both worked, but they are not the same install. Check yours with
   `ls ~/.dsh/profiles/*/node_modules/@deepseek-ai/dsh-base/package.json`. If you need
   reproducibility, snapshot `~/.dsh/profiles/` — do not assume the pin did it for you.
-- **Effort values are adapter-side, not backend-validated** — and they move with that drift:
-  the rc.6 adapter offers `off/high/max`, rc.8 offers `off/low/high/max`. Ollama's own API
-  accepts `high/medium/low/none`, so `max` against an Ollama lane is a hard 400. On cloud
-  lanes stick to `low`/`high`.
+- **🔴 Reasoning-effort vocabularies do not agree, and nothing validates across the seam.**
+  Measured against three backends:
+
+  | Layer | Accepts |
+  |---|---|
+  | dsh adapter (what the picker offers) | `off` `high` `max` (rc.6) / `+low` (rc.8) |
+  | Ollama API | `high` `medium` `low` `none` |
+  | vLLM (Qwen3.8) | `xhigh` `medium` `low` |
+
+  The adapter validates your choice against *its* list, the backend rejects from *its* list,
+  and the two can have an empty intersection — so a legal-looking effort is a hard 400 at
+  turn time. **`off` is the portable choice**; it is what makes a non-DeepSeek backend work.
 - **Panes inherit the herdr *server's* environment, not your shell's.** If you set
   `PODSH_HOST` (or any env) in a launcher, an already-running herdr server won't have it —
   relaunching the client connects back to the same server. Kill the server first, then start
