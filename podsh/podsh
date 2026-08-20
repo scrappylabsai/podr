@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# evolv — a thin launcher for the DeepSeek Harness (dsh) with a terminal face.
-# Generic edition shipped with podr; point it at any OpenAI-compatible endpoint.
+# podsh — a thin launcher for the DeepSeek Harness (dsh) with a terminal face.
+# Shipped with podr; point it at any OpenAI-compatible endpoint.
 #
-#   evolv attach [...]      terminal face of the dsh web host (see attach.mjs)
-#   evolv send   [...]      drive host sessions from any shell (see send.mjs)
-#   evolv web    [...]      boot the dsh web host (UI at http://127.0.0.1:3080)
-#   evolv "task"            headless one-shot
+#   podsh attach [...]      terminal face of the dsh web host (see attach.mjs)
+#   podsh send   [...]      drive host sessions from any shell (see send.mjs)
+#   podsh web    [...]      boot the dsh web host (UI at http://127.0.0.1:3080)
+#   podsh "task"            headless one-shot
 #
 # Config (env):
 #   DEEPSEEK_BASE_URL   your model endpoint, e.g. http://localhost:8000/v1
@@ -20,18 +20,19 @@ set -euo pipefail
 # dsh needs node >= 22.15 (node:zlib zstd exports); fail early with a real message.
 NODE_V="$(node -v 2>/dev/null | tr -d v || true)"
 if [ -z "$NODE_V" ]; then
-  echo "evolv: node not found — install Node.js >= 22.15" >&2; exit 1
+  echo "podsh: node not found — install Node.js >= 22.15" >&2; exit 1
 fi
 if [ "$(printf '%s\n22.15.0\n' "$NODE_V" | sort -V | head -1)" != "22.15.0" ]; then
-  echo "evolv: node $NODE_V is too old — dsh needs >= 22.15 (node:zlib zstd)." >&2
-  echo "evolv: set DSH_NODE_BIN or upgrade node." >&2; exit 1
+  echo "podsh: node $NODE_V is too old — dsh needs >= 22.15 (node:zlib zstd)." >&2
+  echo "podsh: set DSH_NODE_BIN or upgrade node." >&2; exit 1
 fi
 
 DSH_PIN="${DSH_PIN:-0.1.0-rc.6}"
-# Optional config overlay (e.g. examples/ollama-cloud.patch.yml) applied to
+# Optional config overlay (PODSH_PATCH, e.g. examples/ollama-cloud.patch.yml) applied to
 # web/headless boots — how you point one install at a second lane.
 PATCHES=()
-[ -n "${EVOLV_PATCH:-}" ] && PATCHES+=(--patch "$EVOLV_PATCH")
+PATCH="${PODSH_PATCH:-${EVOLV_PATCH:-}}"
+[ -n "$PATCH" ] && PATCHES+=(--patch "$PATCH")
 export DEEPSEEK_BASE_URL="${DEEPSEEK_BASE_URL:-http://127.0.0.1:8000/v1}"
 export DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-local}"
 
@@ -40,9 +41,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 case "${1:-}" in
   attach)
     shift
-    # HERDR_AGENT is podr's env-hint: the pane is identified as the `evolv`
-    # agent without any screen scraping (see src/detect/manifests/evolv.toml).
-    export HERDR_AGENT=evolv
+    # HERDR_AGENT is podr's env-hint: the pane is identified as the `dsh`
+    # agent without any screen scraping (see src/detect/manifests/dsh.toml).
+    export HERDR_AGENT=dsh
     exec node "$HERE/attach.mjs" "$@"
     ;;
   send)

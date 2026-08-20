@@ -1,0 +1,39 @@
+id = "dsh"
+version = "2026.08.19.1"
+min_engine_version = 1
+updated_at = "2026-08-19T00:00:00Z"
+aliases = ["podsh"]
+
+# A dsh session reaches the herd through `podsh attach`, a terminal client for
+# the dsh web host. Because the client is ours it BROADCASTS its state rather
+# than being reverse-engineered: it emits an OSC title on every transition, and
+# the title alone is authoritative. Grammar (attach.mjs refreshTitle, one line):
+#   working  "⠿ dsh · <session title>"   braille prefix, matches claude's convention
+#   blocked  "⏸ dsh · approval|question" pending approval/question frame
+#   idle     "✳ dsh · <session title>"   no open turn, nothing pending
+# Screen-content rules are deliberately absent: the pane body is a scrolling
+# tail of model-generated text and must never drive state.
+
+[[rules]]
+id = "osc_title_blocked"
+state = "blocked"
+priority = 900
+region = "osc_title"
+visible_blocker = true
+regex = ['^⏸ dsh ']
+
+[[rules]]
+id = "osc_title_working"
+state = "working"
+priority = 500
+region = "osc_title"
+visible_working = true
+regex = ['^[\x{2800}-\x{28FF}] dsh ']
+
+[[rules]]
+id = "osc_title_idle"
+state = "idle"
+priority = 250
+region = "osc_title"
+visible_idle = true
+regex = ['^✳ dsh ']

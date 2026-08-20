@@ -63,7 +63,7 @@ pub enum Agent {
     Qodercli,
     Maki,
     Reasonix,
-    Evolv,
+    Dsh,
 }
 
 impl Agent {
@@ -90,7 +90,7 @@ impl Agent {
         Self::Qodercli,
         Self::Maki,
         Self::Reasonix,
-        Self::Evolv,
+        Self::Dsh,
     ];
 
     pub const SCREEN_MANIFEST_AGENTS: [Self; 21] = [
@@ -114,7 +114,7 @@ impl Agent {
         Self::Qodercli,
         Self::Maki,
         Self::Reasonix,
-        Self::Evolv,
+        Self::Dsh,
     ];
 }
 
@@ -142,7 +142,7 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::Qodercli => "qodercli",
         Agent::Maki => "maki",
         Agent::Reasonix => "reasonix",
-        Agent::Evolv => "evolv",
+        Agent::Dsh => "dsh",
     }
 }
 
@@ -176,9 +176,9 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::Qodercli => "qodercli",
         Agent::Maki => "maki",
         Agent::Reasonix => "reasonix",
-        // Bare `evolv` is lanes/headless today; herdr passes args per-start:
-        // `herdr agent start <name> --kind evolv -- attach`
-        Agent::Evolv => "evolv",
+        // podsh is the terminal client for a dsh web host; herdr passes args
+        // per-start: `herdr agent start <name> --kind dsh -- attach`
+        Agent::Dsh => "podsh",
     }
 }
 
@@ -216,9 +216,9 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "qodercli" | "qoderclicn" | "qoder" | "qodercn" => Some(Agent::Qodercli),
         "maki" => Some(Agent::Maki),
         "reasonix" | "deepseek-reasonix" => Some(Agent::Reasonix),
-        // attach.mjs: node-wrapper unwrap yields the script basename; the
-        // HERDR_AGENT=evolv env hint resolves through "evolv".
-        "evolv" | "dsh-evolv" | "attach.mjs" => Some(Agent::Evolv),
+        // podsh is the client; "dsh" is the canonical label and the HERDR_AGENT
+        // env hint. attach.mjs is the node-wrapper-unwrapped script basename.
+        "dsh" | "podsh" | "evolv" | "attach.mjs" => Some(Agent::Dsh),
         _ => None,
     }
 }
@@ -796,7 +796,7 @@ mod tests {
             (Agent::Qodercli, "qodercli"),
             (Agent::Maki, "maki"),
             (Agent::Reasonix, "reasonix"),
-            (Agent::Evolv, "evolv"),
+            (Agent::Dsh, "podsh"),
         ];
         assert_eq!(expected.len(), Agent::ALL.len());
         for (agent, executable) in expected {

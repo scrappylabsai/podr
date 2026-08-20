@@ -77,8 +77,8 @@ id = "reasonix"
 path = "reasonix.toml"
 
 [[agents]]
-id = "evolv"
-path = "evolv.toml"
+id = "dsh"
+path = "dsh.toml"
 
 [[agents]]
 id = "copilot"

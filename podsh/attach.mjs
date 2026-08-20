@@ -1,8 +1,7 @@
 #!/usr/bin/env node
-// evolv attach — a terminal face for a running dsh web host (the TUI upstream
-// never shipped). v0: live tail + session flip + OSC titles for herdr.
-// v0.5: in-pane uplink — i prompt (queue), t steer (into the running turn),
-// c cancel turn. Approval/question ANSWERING still pends (/api/respond).
+// podsh attach — a terminal face for a running dsh web host (the TUI upstream
+// never shipped). Live tail, session flip, in-pane uplink (prompt / steer /
+// cancel / approvals), and OSC titles so a multiplexer can track the session.
 //
 // Wire facts (verified live 2026-08-19 against dsh 0.1.0-rc.6):
 //   unary RPC  = HTTP POST /api/<dotted.method>  {type:'client-request',rpcId,method,payload}
@@ -10,7 +9,7 @@
 //   frames     = {type:'server-request',rpcId,method,payload:<MuxFrame>}
 //   auth       = loopback Host fence only
 //
-// Usage: evolv attach [--session <id>] [--host HOST:PORT] [--no-spawn] [--plain]
+// Usage: podsh attach [--session <id>] [--host HOST:PORT] [--no-spawn] [--plain]
 //   default host: $EVOLV_HOST, else 127.0.0.1:3080
 
 import { spawn } from "node:child_process";
@@ -18,13 +17,13 @@ import { openSync, closeSync } from "node:fs";
 
 // ---------- args ----------
 const argv = process.argv.slice(2);
-// EVOLV_HOST lets a launcher/pane set the default host (e.g. a second lane on :3081).
-const opt = { host: process.env.EVOLV_HOST || "127.0.0.1:3080", session: null, spawn: true, plain: false };
+// PODSH_HOST lets a launcher/pane set the default host (e.g. a second lane on :3081).
+const opt = { host: process.env.PODSH_HOST || process.env.EVOLV_HOST || "127.0.0.1:3080", session: null, spawn: true, plain: false };
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   const next = () => {
     const v = argv[++i];
-    if (v === undefined) { console.error(`evolv attach: ${a} needs a value`); process.exit(2); }
+    if (v === undefined) { console.error(`podsh attach: ${a} needs a value`); process.exit(2); }
     return v;
   };
   if (a === "--session") opt.session = next();
@@ -34,7 +33,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === "--no-spawn") opt.spawn = false;
   else if (a === "--plain") opt.plain = true;
   else if (a === "--help" || a === "-h") {
-    console.log(`evolv attach [--session <id>] [--host HOST:PORT] [--no-spawn] [--plain]\n  default host: ${opt.host}${process.env.EVOLV_HOST ? " (from EVOLV_HOST)" : ""}`);
+    console.log(`podsh attach [--session <id>] [--host HOST:PORT] [--no-spawn] [--plain]\n  default host: ${opt.host}${process.env.PODSH_HOST || process.env.EVOLV_HOST ? " (from PODSH_HOST)" : ""}`);
     process.exit(0);
   }
 }
@@ -66,7 +65,7 @@ const trim1 = (s, n = 2000) => {
   return s.length <= n ? s : s.slice(0, n) + C.gray(` … (+${s.length - n} chars)`);
 };
 
-// ---------- OSC titles (the herdr contract: braille=working, ✳=idle, ⏸=blocked) ----------
+// ---------- OSC titles (the podr contract: braille=working, ✳=idle, ⏸=blocked) ----------
 let lastTitle = "";
 function setTitle(t) {
   if (opt.plain || !process.stdout.isTTY) return;
@@ -99,12 +98,11 @@ async function ensureHost() {
   if (await hostUp()) return true;
   const isLoopback = /^(127\.|localhost|\[::1\])/.test(opt.host);
   if (opt.spawn && isLoopback) {
-    const backend = process.env.EVOLV_BACKEND || "local";
-    const port = (opt.host.match(/:(\d+)$/) ?? [])[1] || "3080";
-    out(C.yellow(`no dsh host at ${opt.host} — spawning: evolv --backend ${backend} web --port ${port} (log: /tmp/evolv-web.log)`));
-    const logFd = openSync("/tmp/evolv-web.log", "a");
-    const evolvBin = process.env.EVOLV_BIN ?? new URL("./evolv", import.meta.url).pathname;
-    const child = spawn(evolvBin, ["--backend", backend, "web", "--port", port], {
+        const port = (opt.host.match(/:(\d+)$/) ?? [])[1] || "3080";
+    out(C.yellow(`no dsh host at ${opt.host} — spawning: podsh web --port ${port} (log: /tmp/podsh-web.log)`));
+    const logFd = openSync("/tmp/podsh-web.log", "a");
+    const podshBin = process.env.PODSH_BIN ?? process.env.EVOLV_BIN ?? new URL("./podsh", import.meta.url).pathname;
+    const child = spawn(podshBin, ["web", "--port", port], {
       detached: true, stdio: ["ignore", logFd, logFd],
     });
     child.on("error", (e) => out(C.red(`spawn failed: ${e.message}`))); // wait loop then falls through
@@ -116,13 +114,21 @@ async function ensureHost() {
       if (i % 3 === 0) process.stdout.write(C.dim("."));
       if (await hostUp(1500)) { out(C.green(" up")); return true; }
     }
-    out(C.red(" gave up after 5 min — check /tmp/evolv-web.log"));
+    out(C.red(" gave up after 5 min — check /tmp/podsh-web.log"));
   }
-  out(C.yellow("falling back to read-only file tail (evolv-tail --follow)"));
-  const t = spawn(`${process.env.HOME}/bin/evolv-tail`, ["--follow"], { stdio: "inherit" });
-  t.on("error", (e) => { console.error(`evolv-tail unavailable: ${e.message}`); process.exit(1); });
-  t.on("exit", (code) => process.exit(code ?? 0));
-  return false;
+  // Optional read-only fallback: a session-log tailer, if one is installed.
+  const tailer = process.env.PODSH_TAILER;
+  if (tailer) {
+    out(C.yellow(`falling back to read-only file tail (${tailer} --follow)`));
+    const t = spawn(tailer, ["--follow"], { stdio: "inherit" });
+    t.on("error", (e) => { console.error(`podsh: tailer unavailable: ${e.message}`); process.exit(1); });
+    t.on("exit", (code) => process.exit(code ?? 0));
+    return false;
+  }
+  console.error(`podsh: no dsh host at ${opt.host}. Start one with \`podsh web\`, or point at an
+existing host with --host / $PODSH_HOST. (Set $PODSH_TAILER to fall back to a
+read-only session-log tailer instead.)`);
+  process.exit(1);
 }
 
 // ---------- session helpers ----------
@@ -148,10 +154,10 @@ const st = {
 };
 
 function refreshTitle() {
-  const t = st.title || (st.sid ? shortId(st.sid) : "evolv");
-  if (st.pending.size) setTitle(`⏸ evolv · ${[...st.pending.values()][0].kind}`);
-  else if (st.turnOpen) setTitle(`⠿ evolv · ${t}`);
-  else setTitle(`✳ evolv · ${t}`);
+  const t = st.title || (st.sid ? shortId(st.sid) : "dsh");
+  if (st.pending.size) setTitle(`⏸ dsh · ${[...st.pending.values()][0].kind}`);
+  else if (st.turnOpen) setTitle(`⠿ dsh · ${t}`);
+  else setTitle(`✳ dsh · ${t}`);
 }
 
 function endStream() {
@@ -447,7 +453,7 @@ async function openModelPicker() {
   const flat = [];
   for (const g of v.groups ?? []) for (const m of g.models ?? []) flat.push({ provider: g.id, model: m.id, efforts: m.reasoning?.efforts ?? [] });
   for (const f of v.failures ?? []) out(C.yellow(`  (catalog failure: ${sanitizeLine(f.id)})`));
-  if (!flat.length) { out(C.yellow("empty catalog — a serving route can still work: evolv send --model <provider/model>")); return; }
+  if (!flat.length) { out(C.yellow("empty catalog — a serving route can still work: podsh send --model <provider/model>")); return; }
   flat.slice(0, 15).forEach((m, i) =>
     out(` ${String(i + 1).padStart(2)} ${sanitizeLine(`${m.provider}/`)}${C.bold(sanitizeLine(m.model))}${m.efforts.length ? C.gray(` (efforts: ${m.efforts.map((e) => sanitizeLine(e.id)).join("/")})`) : ""}${m.provider === cur.provider && m.model === cur.model ? C.cyan(" ← current") : ""}`));
   out(C.gray("  number + Enter · Esc cancels"));
@@ -502,7 +508,7 @@ async function main() {
     : defSid;
 
   const runningN = items.filter((i) => i.running).length;
-  out(C.gray(`evolv attach · host ${opt.host} · ${items.length} sessions${runningN ? ` (${runningN} running)` : ""}`));
+  out(C.gray(`podsh attach · host ${opt.host} · ${items.length} sessions${runningN ? ` (${runningN} running)` : ""}`));
   out(C.gray(`keys: l sessions · m model/effort · i prompt · s steer(into running turn) · c cancel turn · y/n approvals · 1-9 questions · q quit · "/"=host cmd`));
   await attachTo(sid, items);
 
@@ -545,7 +551,7 @@ async function main() {
       clearTimeout(stableTimer);
       if (st.quitting) return;
       endStream();
-      if (++retries > 20) { out(C.red("host gone (20 retries) — exiting; try evolv-tail --follow")); return quit(1); }
+      if (++retries > 20) { out(C.red("host gone (20 retries) — exiting")); return quit(1); }
       if (retries === 1) out(C.yellow("connection lost — reconnecting…"));
       setTimeout(async () => {
         if (await hostUp(1500)) { out(C.green("reconnected") + C.gray(" (gap possible — press l to re-pick/refresh)")); }
@@ -560,11 +566,11 @@ async function main() {
 function quit(code) {
   st.quitting = true;
   endStream();
-  setTitle("✳ evolv · bye");
+  setTitle("✳ dsh · bye");
   if (isTTY) process.stdin.setRawMode(false);
   process.exit(code);
 }
 process.on("SIGINT", () => quit(0));
 process.on("SIGTERM", () => quit(0));
 
-main().catch((e) => { console.error(C.red(`evolv attach: ${e.message}`)); process.exit(1); });
+main().catch((e) => { console.error(C.red(`podsh attach: ${e.message}`)); process.exit(1); });
