@@ -55,9 +55,15 @@ export PATH="$PWD/evolv:$PATH"
 export DEEPSEEK_BASE_URL=http://localhost:8000/v1   # any OpenAI-compatible endpoint
 export DEEPSEEK_API_KEY=local
 
-# 3. Run herdr (target/release/herdr), open a pane, and:
+# 3. Launch it — ./podr runs the fork in its own named herdr session with
+#    evolv already on PATH, then open a pane and:
+./podr
 evolv attach
 ```
+
+`./podr` keeps its socket and state separate from any herdr you already run, so
+you can try the fork without disturbing your setup. Point it at a lane with
+`EVOLV_HOST` / `DEEPSEEK_BASE_URL` / `EVOLV_PATCH`.
 
 `evolv attach` finds a running dsh web host (or boots one, or falls back to a
 read-only file tail of `~/.dsh/sessions`), tails the most recent session live,
@@ -125,9 +131,12 @@ Ollama Cloud rejects dsh's default 256k max-token request with a hard 400.
   fresh. This is how you point one podr's panes at a specific dsh lane:
 
   ```bash
-  export EVOLV_HOST=127.0.0.1:3081   # then start herdr; panes get it
+  EVOLV_HOST=127.0.0.1:3081 ./podr   # panes inherit it
   evolv attach                        # no --host needed
   ```
+  (Isolate with herdr's own `--session <name>`, as `./podr` does — never by overriding
+  `XDG_CONFIG_HOME`/`XDG_STATE_HOME`, which are global and will break mise/direnv/etc.
+  in every pane.)
 - **Model selection is sticky.** A new session inherits the last selection, which can beat
   your overlay's default — pass `evolv send --model …:cloud --effort high` explicitly when
   lane-hopping.

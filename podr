@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# podr — launch the fork in its own named herdr session, with evolv on PATH.
+#
+# Uses herdr's built-in named sessions (`--session podr`), which isolate the
+# socket and persisted state under the herdr config dir. Deliberately does NOT
+# override XDG_CONFIG_HOME/XDG_STATE_HOME: those are global and would break
+# every other tool in your panes (mise, direnv, ...).
+#
+# Config (all optional):
+#   DEEPSEEK_BASE_URL   model endpoint for evolv        (default 127.0.0.1:8000/v1)
+#   EVOLV_HOST          dsh host panes attach to        (default 127.0.0.1:3080)
+#   EVOLV_PATCH         dsh config overlay for a lane   (see evolv/examples/)
+#   PODR_SESSION        herdr session name              (default "podr")
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BIN="${PODR_BIN:-$HERE/target/release/herdr}"
+[ -x "$BIN" ] || { echo "podr: no binary at $BIN — run: cargo build --release" >&2; exit 1; }
+
+export PATH="$HERE/evolv:$PATH"
+export DEEPSEEK_BASE_URL="${DEEPSEEK_BASE_URL:-http://127.0.0.1:8000/v1}"
+export DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-local}"
+export EVOLV_HOST="${EVOLV_HOST:-127.0.0.1:3080}"
+
+# Drop inherited pane identity so a nested launch doesn't confuse the server.
+exec env -u HERDR_PANE_ID -u HERDR_TAB_ID -u HERDR_WORKSPACE_ID -u HERDR_ENV \
+  "$BIN" --session "${PODR_SESSION:-podr}" "$@"
