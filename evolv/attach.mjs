@@ -10,14 +10,16 @@
 //   frames     = {type:'server-request',rpcId,method,payload:<MuxFrame>}
 //   auth       = loopback Host fence only
 //
-// Usage: evolv attach [--session <id>] [--host 127.0.0.1:3080] [--no-spawn] [--plain]
+// Usage: evolv attach [--session <id>] [--host HOST:PORT] [--no-spawn] [--plain]
+//   default host: $EVOLV_HOST, else 127.0.0.1:3080
 
 import { spawn } from "node:child_process";
 import { openSync, closeSync } from "node:fs";
 
 // ---------- args ----------
 const argv = process.argv.slice(2);
-const opt = { host: "127.0.0.1:3080", session: null, spawn: true, plain: false };
+// EVOLV_HOST lets a launcher/pane set the default host (e.g. a second lane on :3081).
+const opt = { host: process.env.EVOLV_HOST || "127.0.0.1:3080", session: null, spawn: true, plain: false };
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   const next = () => {
@@ -32,7 +34,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === "--no-spawn") opt.spawn = false;
   else if (a === "--plain") opt.plain = true;
   else if (a === "--help" || a === "-h") {
-    console.log("evolv attach [--session <id>] [--host 127.0.0.1:3080] [--no-spawn] [--plain]");
+    console.log(`evolv attach [--session <id>] [--host HOST:PORT] [--no-spawn] [--plain]\n  default host: ${opt.host}${process.env.EVOLV_HOST ? " (from EVOLV_HOST)" : ""}`);
     process.exit(0);
   }
 }

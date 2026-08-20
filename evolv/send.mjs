@@ -14,10 +14,10 @@
 //   evolv send --models [--session id]        model catalog + current selection
 //   evolv send --model <provider/model> [--effort <id>] [--session id]
 //   evolv send --effort <id> [--session id]   keep model, change reasoning effort
-//   any command: [--host 127.0.0.1:3080] [--watch]
+//   any command: [--host HOST:PORT] [--watch]   (default host: $EVOLV_HOST or 127.0.0.1:3080)
 
 const argv = process.argv.slice(2);
-const opt = { host: "127.0.0.1:3080", session: null, steer: false, cancel: false, list: false, mknew: false, cwd: null, watch: false, models: false, model: null, effort: null, text: [] };
+const opt = { host: process.env.EVOLV_HOST || "127.0.0.1:3080", session: null, steer: false, cancel: false, list: false, mknew: false, cwd: null, watch: false, models: false, model: null, effort: null, text: [] };
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   const next = () => { const v = argv[++i]; if (v === undefined) { console.error(`evolv send: ${a} needs a value`); process.exit(2); } return v; };
