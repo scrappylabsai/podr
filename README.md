@@ -81,9 +81,26 @@ mode to enter first.
 ╭────────────────────────────────────────────────────────────────╮
 │ ❯ run the tests and summarize the failures                     │
 ╰────────────────────────────────────────────────────────────────╯
-  / commands · ↑ history · \ + enter new line   ⠹ working · deepseek-v4-flash · effort high
+  / commands · ↑ history · \ + enter new line   ⠹ working 12s · deepseek-v4-flash high · ctx 12%
 ```
 
+```
+⏺ Bash(cargo test --quiet)
+  ⎿ running 34 tests
+    test detect::dsh::idle ... ok
+    … +29 lines ctrl+r to expand
+⏺ Two failures, both in the approval path — here is what they share:
+── turn 4 · completed · 21.6s ──
+```
+
+- **Tool calls show what they did**, not just their name. dsh renders every event
+  into a typed card — terminal, read, search, diff, web — and the pane draws each
+  one: a failed command leads with its exit code, a read reports lines and path, a
+  search reports match counts. Results cap at five lines, and **ctrl+r** reprints
+  the last truncated one in full.
+- **The status line** carries state, elapsed seconds, model + effort and how much
+  context the session holds (`ctx 12%` — yellow past 70%, red past 90%), fed live
+  by the host's projection stream.
 - **enter** sends. While a turn is running it **steers into it** instead;
   `/queue <text>` lines the text up for afterwards. `\` + enter (or alt+enter)
   starts a new line.
