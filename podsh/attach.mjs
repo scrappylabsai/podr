@@ -13,8 +13,10 @@
 //   default host: $EVOLV_HOST, else 127.0.0.1:3080
 
 import { spawn } from "node:child_process";
-import { openSync, closeSync } from "node:fs";
-import { probeLanes, laneServes, findLaneFor } from "./lanes.mjs";
+import { openSync, closeSync, readFileSync, appendFileSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { probeLanes, laneServes, findLaneFor, renderLanes } from "./lanes.mjs";
+import { Region, LineEditor, KeyDecoder, SPINNER, visWidth, truncVis, padVis } from "./ui.mjs";
 
 // ---------- args ----------
 const argv = process.argv.slice(2);
@@ -57,8 +59,18 @@ const C = opt.plain || !process.stdout.isTTY
       bold: (s) => `\x1b[1m${s}\x1b[0m`,
       gray: (s) => `\x1b[90m${s}\x1b[0m`,
     };
-let composeBuf = null; // non-null while the input line is open: render output queues here
-const emit = (s) => { if (composeBuf) composeBuf.push(s); else process.stdout.write(s); };
+// Rich mode is the bottom-anchored composer (ui.mjs): the input box is always
+// live and the transcript scrolls above it. --plain and non-TTY keep the older
+// modal path untouched, so scripts and dumb terminals see what they always saw.
+const RICH = isTTY && !opt.plain;
+let region = null;   // rich mode only
+let editor = null;   // rich mode only
+let composeBuf = null; // --plain only: output queues while the modal input line is open
+const emit = (s) => {
+  if (region) region.write(s);
+  else if (composeBuf) composeBuf.push(s);
+  else process.stdout.write(s);
+};
 const out = (s = "") => emit(s + "\n");
 // Strip terminal control bytes from UNTRUSTED text (session titles, model output,
 // tool names all originate from model/user content). Keeps \n and \t.
@@ -305,9 +317,9 @@ function handleFrame(f, rpcId) {
         // v0 limitation: one shared key — with 2+ questions outstanding, the first
         // resolved clears the blocked state early (resolved frames mint fresh rpcIds,
         // so per-question matching isn't possible from this frame alone).
-        st.pending.set(`q`, "question");
+        st.pending.set(`q`, { kind: "question", rpcId, questions: f.questions ?? [] });
         const q = (f.questions ?? []).map((x) => x?.question).filter(Boolean).join(" | ");
-        out(C.red(C.bold(`⏸ QUESTION`)) + ` — ${trim1(q || "(see browser)", 300)} — answer in the browser tab`);
+        out(C.red(C.bold(`⏸ QUESTION`)) + ` — ${trim1(q || "(see browser)", 300)}`);
         refreshTitle();
       }
       break;
@@ -336,7 +348,7 @@ async function showHeader(item) {
   st.title = typeof title === "string" ? title : "";
   out("");
   out(C.bold(`◍ ${sanitizeLine(st.title || "(untitled)")}`) + C.gray(`  ${shortId(st.sid)}  ${sanitizeLine(item?.cwd ?? "")}`));
-  out(C.gray(`  ${item?.running ? "running" : "idle"} · l sessions · m model · i prompt · s steer · c cancel · q quit`));
+  out(C.gray(`  ${item?.running ? "running" : "idle"}${RICH ? " · type to send · / for commands" : " · l sessions · m model · i prompt · s steer · c cancel · q quit"}`));
   st.turnOpen = !!item?.running;
   st.pending.clear();
   refreshTitle();
@@ -399,7 +411,7 @@ async function openPicker() {
 function pickerKey(ch) {
   if (ch === "\x1b") { pickerBuf = null; out(C.gray("(cancelled)")); return; }
   if (ch === "\r" || ch === "\n") {
-    out(""); // move off the echoed-digits line
+    if (!region) out(""); // move off the echoed-digits line
     const n = parseInt(pickerBuf, 10);
     pickerBuf = null;
     const it = pickerItems[n - 1];
@@ -407,7 +419,7 @@ function pickerKey(ch) {
     attachTo(it.sessionId).catch((e) => out(C.red(e.message)));
     return;
   }
-  if (/[0-9]/.test(ch)) { pickerBuf += ch; process.stdout.write(ch); }
+  if (/[0-9]/.test(ch)) { pickerBuf += ch; if (region) region.schedule(); else process.stdout.write(ch); }
 }
 
 // ---------- in-pane input (v0.5 uplink) ----------
@@ -542,7 +554,7 @@ function mpKey(ch) {
     const e = Number.isNaN(n) ? undefined : mp.chosen.efforts[n - 1]?.id;
     return applyModel(mp.chosen, e);
   }
-  if (/[0-9]/.test(ch)) { mp.buf += ch; process.stdout.write(ch); }
+  if (/[0-9]/.test(ch)) { mp.buf += ch; if (region) region.schedule(); else process.stdout.write(ch); }
 }
 
 function cancelTurn() {
@@ -550,6 +562,258 @@ function cancelTurn() {
   rpc("session.cancel", { sessionId: st.sid })
     .then(() => out(C.yellow("✋ cancelled active turn (queued work resumes FIFO)")))
     .catch((e) => out(C.red(`cancel failed: ${e.message}`)));
+}
+
+// ---------- composer (rich mode) ----------
+// One always-live input box pinned to the bottom, transcript scrolling above
+// it — the shape people already know from Claude Code / Kimi. The modal `i`/`s`
+// path below is kept for --plain and non-TTY.
+
+const HIST_DIR = `${homedir()}/.podsh`;
+const HIST_FILE = `${HIST_DIR}/history`;
+function loadHistory() {
+  try {
+    return readFileSync(HIST_FILE, "utf8").split("\n").filter(Boolean)
+      .map((l) => l.replace(/\\n/g, "\n")).slice(-500);
+  } catch { return []; }
+}
+function saveHistory(line) {
+  try {
+    mkdirSync(HIST_DIR, { recursive: true });
+    appendFileSync(HIST_FILE, line.replace(/\n/g, "\\n") + "\n");
+  } catch { /* history is a convenience, never a reason to fail a send */ }
+}
+
+// An approval owns the keyboard while it is pending; a question only does when
+// it is answerable from a pane (one question, single-select, real options) —
+// otherwise the browser has to take it and typing should keep working.
+function pendingPanel() {
+  const ap = firstPending("approval");
+  if (ap) return { kind: "approval", ap };
+  const qn = firstPending("question");
+  if (qn) {
+    const q = qn.questions?.[0];
+    return { kind: "question", qn, q, answerable: qn.questions?.length === 1 && !q?.multiSelect && !!q?.options?.length };
+  }
+  return null;
+}
+
+let spinI = 0;
+let lastCtrlC = 0;
+function statusRight() {
+  const state = st.pending.size ? C.red("blocked")
+    : st.turnOpen ? C.yellow(`${SPINNER[spinI % SPINNER.length]} working`)
+    : C.green("idle");
+  // provider prefixes are the same on every row of a lane's catalog — the model
+  // and the effort are what actually change under you.
+  const m = lastModelLine ? lastModelLine.slice(lastModelLine.indexOf("/") + 1) : "";
+  return state + (m ? C.gray(" · " + truncVis(m, 34)) : "");
+}
+// The right side (what the session is doing) outranks the key hints: truncate
+// the hints, never the state.
+function hintRow(cols, left) {
+  const r = statusRight() + " ";
+  const rw = visWidth(r);
+  if (cols - rw < 14) return " ".repeat(Math.max(0, cols - rw)) + r;
+  const l = truncVis("  " + left, cols - rw - 1);
+  return C.gray(l) + " ".repeat(Math.max(1, cols - visWidth(l) - rw)) + r;
+}
+
+function regionLines(cols) {
+  const inner = Math.max(4, cols - 4);
+  const bar = (a, b, col) => col(a + "─".repeat(Math.max(0, cols - 2)) + b);
+
+  const p = pendingPanel();
+  if (p && (p.kind === "approval" || p.answerable)) {
+    const lines = [bar("╭", "╮", C.red)];
+    const row = (t) => lines.push(C.red("│ ") + padVis(t, inner) + C.red(" │"));
+    if (p.kind === "approval") {
+      row(C.bold("⏸ approval") + C.gray("  tool ") + C.bold(sanitizeLine(p.ap.toolName ?? "?")));
+      row("");
+      row(C.green(" 1") + " allow once");
+      row(C.red(" 2") + " reject");
+      lines.push(bar("╰", "╯", C.red));
+      lines.push(hintRow(cols, "y/1 allow · n/2 reject · the browser tab can answer too"));
+    } else {
+      row(C.bold("⏸ question") + C.gray("  " + truncVis(sanitizeLine(p.q?.question ?? ""), Math.max(4, inner - 14))));
+      row("");
+      for (const [i, o] of (p.q.options ?? []).slice(0, 9).entries())
+        row(C.cyan(` ${i + 1}`) + " " + truncVis(sanitizeLine(o?.label ?? String(o)), Math.max(4, inner - 4)));
+      lines.push(bar("╰", "╯", C.red));
+      lines.push(hintRow(cols, "1-9 answers · or answer in the browser tab"));
+    }
+    return { lines };
+  }
+
+  if (mp || pickerBuf !== null) {
+    const label = mp ? (mp.stage === "effort" ? "effort" : "model") : "session";
+    const buf = mp ? mp.buf : pickerBuf;
+    const pre = `  ${label} (from the list above) `;
+    return {
+      lines: [C.gray("  ") + C.bold(label) + C.gray(" (from the list above) ") + C.cyan("❯ ") + buf,
+              hintRow(cols, "number + enter · esc cancels")],
+      cursor: { row: 0, col: visWidth(pre) + 2 + visWidth(buf) },
+    };
+  }
+
+  const glyph = st.turnOpen ? C.yellow("⇢") : C.cyan("❯");
+  const r = editor.render(inner, glyph + " ", "  ");
+  const lines = [bar("╭", "╮", C.gray)];
+  for (const l of r.lines) lines.push(C.gray("│ ") + padVis(l, inner) + C.gray(" │"));
+  lines.push(bar("╰", "╯", C.gray));
+  lines.push(hintRow(cols, st.turnOpen
+    ? "enter steers into the running turn · /queue to line it up · esc interrupts"
+    : "/ commands · ↑ history · \\ + enter new line · ctrl+c ×2 quit"));
+  return { lines, cursor: { row: r.cursor.row + 1, col: r.cursor.col + 2 } };
+}
+
+const LOCAL_CMDS = {
+  help: "this list",
+  sessions: "pick a session on this host",
+  model: "pick model + thinking effort",
+  lanes: "which dsh hosts are up, and what each serves",
+  queue: "/queue <text> — line it up instead of steering the running turn",
+  cancel: "cancel the running turn",
+  clear: "clear the screen",
+  quit: "leave the pane (the session keeps running)",
+};
+
+function localHelp() {
+  out("");
+  out(C.bold("─ podsh ─"));
+  out(C.gray("  just type · enter sends · \\ + enter (or alt+enter) for a new line"));
+  out(C.gray("  ↑/↓ history · ctrl+a/e home/end · ctrl+w/u/k delete · ctrl+l clear"));
+  out(C.gray("  esc interrupts a running turn (clears the box first) · ctrl+c ×2 quits"));
+  for (const [k, v] of Object.entries(LOCAL_CMDS)) out("  " + padVis(C.cyan("/" + k), 12) + C.gray(v));
+  out(C.gray("  any other /command goes to the host (compact · plan · permission · goal · export · feedback)"));
+}
+
+async function showLanes() {
+  out(C.gray("scanning lanes…"));
+  try { out(renderLanes(await probeLanes(), { hereHost: opt.host })); }
+  catch (e) { out(C.red(`lanes failed: ${e.message}`)); }
+}
+
+function submitText(text, mode) {
+  const t = text.trim();
+  if (!t) return;
+  if (t.startsWith("/")) {
+    const sp = t.indexOf(" ");
+    const word = (sp === -1 ? t.slice(1) : t.slice(1, sp)).toLowerCase();
+    const arg = sp === -1 ? "" : t.slice(sp + 1).trim();
+    switch (word) {
+      case "help": case "?": return localHelp();
+      case "session": case "sessions": openPicker().catch((e) => out(C.red(e.message))); return;
+      case "model": case "models": openModelPicker().catch((e) => out(C.red(e.message))); return;
+      case "lanes": showLanes(); return;
+      case "cancel": case "stop": return cancelTurn();
+      case "clear": return region ? region.clearScreen() : undefined;
+      case "quit": case "exit": return quit(0);
+      case "queue": return arg ? submitText(arg, "queue") : out(C.gray("(/queue <text>)"));
+    }
+    // Anything else is the host's: session.prompt does NOT dispatch commands on
+    // rc.6 (it leaks them to the model as text) — commands/execute is the path.
+    out(C.cyan("/" + word) + (arg ? C.gray(" " + sanitizeLine(arg)) : ""));
+    rpc("commands/execute", { args: { agentId: st.sid, line: t } })
+      .then((v) => out(C.gray(`(${v?.result?.kind ?? "ok"}) ${sanitizeLine(v?.result?.text ?? "")}`)))
+      .catch((e) => out(C.red(`command failed: ${e.message}`)));
+    return;
+  }
+  rpc("session.prompt", { sessionId: st.sid, mode: mode === "steer" ? "steer" : "queue", content: [{ type: "text", text: t }] })
+    .then(() => out(C.gray(mode === "steer" ? "(steered into running turn)" : "(queued)")))
+    .catch((e) => out(C.red(`send failed: ${e.message}`)));
+}
+
+// Pickers predate the composer and speak single characters; keep them.
+const asChar = (k) =>
+  k.name === "char" ? k.text
+  : k.name === "enter" ? "\r"
+  : (k.name === "escape" || (k.ctrl && k.name === "c")) ? "\x1b"
+  : null;
+
+function routeKey(k) {
+  if (mp) { const ch = asChar(k); if (ch) mpKey(ch); return; }
+  if (pickerBuf !== null) { const ch = asChar(k); if (ch) pickerKey(ch); return; }
+
+  const p = pendingPanel();
+  if (p && (p.kind === "approval" || p.answerable)) {
+    if (k.ctrl && k.name === "c") return quit(0);
+    if (k.name !== "char") return;
+    if (p.kind === "approval") {
+      if (k.text === "y" || k.text === "1") return answerApproval("allowed-once");
+      if (k.text === "n" || k.text === "2") return answerApproval("rejected");
+      return;
+    }
+    if (/[1-9]/.test(k.text)) answerQuestion(parseInt(k.text, 10));
+    return;
+  }
+
+  const action = editor.handle(k);
+  if (!action) return;
+  if (action === "submit") {
+    const t = editor.value();
+    editor.remember(t);
+    if (t.trim()) saveHistory(t);
+    editor.clear();
+    return submitText(t, st.turnOpen ? "steer" : "queue");
+  }
+  if (action === "escape") {
+    if (editor.value()) return editor.clear();
+    if (st.turnOpen) return cancelTurn();
+    return;
+  }
+  if (action === "interrupt") {
+    if (editor.value()) { editor.clear(); lastCtrlC = 0; return; }
+    const now = Date.now();
+    if (now - lastCtrlC < 2000) return quit(0);
+    lastCtrlC = now;
+    out(C.gray("(ctrl+c again to quit — the session keeps running)"));
+    return;
+  }
+  if (action === "eof") return quit(0);
+  if (action === "clear-screen" && region) return region.clearScreen();
+}
+
+const dec = new KeyDecoder();
+let escTimer = null;
+function richKeys(chunk) {
+  if (escTimer) { clearTimeout(escTimer); escTimer = null; }
+  for (const k of dec.push(chunk)) routeKey(k);
+  // A lone ESC is only distinguishable from the start of a sequence by silence.
+  if (dec.pendingEscape())
+    escTimer = setTimeout(() => {
+      escTimer = null;
+      const k = dec.flushEscape();
+      if (k) { routeKey(k); region?.schedule(); }
+    }, 50);
+  region?.schedule();
+}
+
+function plainKeys(chunk) {
+  for (const ch of chunk) { // raw-mode chunks can carry pastes like "12\r"
+    if (input) { inputKey(ch); continue; }
+    if (mp) { mpKey(ch); continue; }
+    if (pickerBuf !== null) { pickerKey(ch); continue; }
+    if (ch === "q" || ch === "\x03") return quit(0);
+    if (ch === "l") openPicker().catch((e) => out(C.red(e.message)));
+    else if (ch === "i") openInput("queue");
+    else if (ch === "s") openInput("steer");
+    else if (ch === "c") cancelTurn();
+    else if (ch === "m") openModelPicker().catch((e) => out(C.red(e.message)));
+    else if (ch === "y") answerApproval("allowed-once");
+    else if (ch === "n") answerApproval("rejected");
+    else if (/[1-9]/.test(ch)) answerQuestion(parseInt(ch, 10));
+  }
+}
+
+function startComposer() {
+  editor = new LineEditor({ history: loadHistory() });
+  region = new Region({ stream: process.stdout });
+  region.start(regionLines);
+  // A resize reflows rows we no longer know the geometry of: forget the old
+  // region rather than erase the wrong number of lines out of the scrollback.
+  process.stdout.on("resize", () => { region.rows = 0; region.render(); });
+  setInterval(() => { if (st.turnOpen) { spinI++; region?.schedule(); } }, 120).unref();
 }
 
 // ---------- main ----------
@@ -572,30 +836,18 @@ async function main() {
 
   const runningN = items.filter((i) => i.running).length;
   out(C.gray(`podsh attach · host ${opt.host} · ${items.length} sessions${runningN ? ` (${runningN} running)` : ""}`));
-  out(C.gray(`keys: l sessions · m model/effort · i prompt · s steer(into running turn) · c cancel turn · y/n approvals · 1-9 questions · q quit · "/"=host cmd`));
+  out(RICH
+    ? C.gray(`just type · enter sends (steers into a running turn) · alt+enter queues instead · / commands · ↑ history · esc interrupt · ctrl+c ×2 quit`)
+    : C.gray(`keys: l sessions · m model/effort · i prompt · s steer(into running turn) · c cancel turn · y/n approvals · 1-9 questions · q quit · "/"=host cmd`));
   await attachTo(sid, items);
 
   // keys
+  if (RICH) startComposer();
   if (isTTY) {
     process.stdin.setRawMode(true);
     process.stdin.resume();
     process.stdin.setEncoding("utf8");
-    process.stdin.on("data", (chunk) => {
-      for (const ch of chunk) { // raw-mode chunks can carry pastes like "12\r"
-        if (input) { inputKey(ch); continue; }
-        if (mp) { mpKey(ch); continue; }
-        if (pickerBuf !== null) { pickerKey(ch); continue; }
-        if (ch === "q" || ch === "\x03") return quit(0);
-        if (ch === "l") openPicker().catch((e) => out(C.red(e.message)));
-        else if (ch === "i") openInput("queue");
-        else if (ch === "s") openInput("steer");
-        else if (ch === "c") cancelTurn();
-        else if (ch === "m") openModelPicker().catch((e) => out(C.red(e.message)));
-        else if (ch === "y") answerApproval("allowed-once");
-        else if (ch === "n") answerApproval("rejected");
-        else if (/[1-9]/.test(ch)) answerQuestion(parseInt(ch, 10));
-      }
-    });
+    process.stdin.on("data", RICH ? richKeys : plainKeys);
   }
 
   // event stream with reconnect
@@ -649,6 +901,7 @@ function quit(code) {
   st.quitting = true;
   endStream();
   setTitle("✳ dsh · bye");
+  if (region) { region.stop(); region = null; }
   if (isTTY) process.stdin.setRawMode(false);
   process.exit(code);
 }

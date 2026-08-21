@@ -71,14 +71,36 @@ you can try the fork without disturbing your setup. Point it at a lane with
 
 `podsh attach` finds a running dsh web host (or boots one, or falls back to a
 read-only file tail of `~/.dsh/sessions`), tails the most recent session live,
-and joins the herd:
+and joins the herd.
 
-- `l` — flip between sessions (no reconnect; the event mux carries them all)
-- `m` — **model + thinking-effort picker** (the DeepSeek adapter exposes `off/high/max`)
-- `i` — queue a prompt · `s` — **steer into the running turn** · `c` — cancel
-- `y` / `n` — answer tool approvals from the pane (the browser stays live too;
-  first answer wins, the other face clears)
-- `1-9` — answer simple questions · `/…` — host commands (`/permission`, `/plan`, …)
+It has the shape you already know from every other agent CLI: an input box
+pinned to the bottom, transcript scrolling above it. **Just type** — there is no
+mode to enter first.
+
+```
+╭────────────────────────────────────────────────────────────────╮
+│ ❯ run the tests and summarize the failures                     │
+╰────────────────────────────────────────────────────────────────╯
+  / commands · ↑ history · \ + enter new line   ⠹ working · deepseek-v4-flash · effort high
+```
+
+- **enter** sends. While a turn is running it **steers into it** instead;
+  `/queue <text>` lines the text up for afterwards. `\` + enter (or alt+enter)
+  starts a new line.
+- **esc** interrupts the running turn — it clears the box first if you typed
+  something. **ctrl+c** twice leaves the pane; the session keeps running.
+- **↑/↓** walks history (kept in `~/.podsh/history`), and the readline keys work:
+  ctrl+a/e, ctrl+w/u/k, alt+←/→, ctrl+l to clear.
+- **approvals and questions take the keyboard** while they are pending — `y`/`1`
+  allow once, `n`/`2` reject, `1-9` answer a question. The browser tab stays live
+  too: first answer wins and the other face clears.
+- **`/` commands**: `/sessions` flips between sessions (no reconnect — the event
+  mux carries them all), `/model` is the **model + thinking-effort picker** (the
+  DeepSeek adapter exposes `off/high/max`), plus `/lanes`, `/cancel`, `/clear`,
+  `/help`. Anything else is handed to the host: `/compact`, `/plan`,
+  `/permission`, `/goal`, `/export`, `/feedback`.
+- **`--plain`** keeps the older modal keys (`l` `m` `i` `s` `c` · `y`/`n` · `1-9`)
+  for terminals that can't take the composer; piping the output is unchanged.
 
 The browser tab and the terminal pane are **two live faces of one session** —
 the host fans events out to every connected client and sessions have no owner.
