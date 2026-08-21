@@ -165,9 +165,95 @@ const st = {
   pending: new Map(), // approvalId/questionKey -> label (blocked while non-empty)
   title: "",
   streamedStep: null, // "turn:step" whose chunks we streamed (skip its assistant/message body)
+  bulletStep: null,   // "turn:step" that already printed its ⏺ bullet
   midStream: false,   // cursor is mid-line inside a streamed chunk
+  turnStart: null,    // ms, for the elapsed clock in the status line
+  proj: {},           // session projections (contextPressure, tokenUsage, …)
   quitting: false,
 };
+
+const termCols = () => Math.max(40, process.stdout.columns || 100);
+
+// ---------- tool cards ----------
+// The host already renders each event into a typed card (terminal / read /
+// search / diff / web / generic) — the browser draws them as panels. A pane gets
+// the same data, so it can show what a tool actually DID instead of its name.
+const TOOL_LABEL = {
+  bash: "Bash", read: "Read", edit: "Edit", write: "Write", grep: "Grep",
+  glob: "Glob", web_fetch: "Fetch", web_search: "Search", skill: "Skill",
+  todo_write: "Todo", job_output: "Job",
+};
+function toolLabel(name, title) {
+  const nm = TOOL_LABEL[name] ?? (name ? name[0].toUpperCase() + name.slice(1) : "Tool");
+  // host titles often already lead with the verb ("Read /path", "Write /path")
+  return { nm, arg: String(title ?? "").replace(new RegExp(`^${nm}\\s+`, "i"), "") };
+}
+
+// The last result we truncated, so ctrl+r can show the whole thing.
+let lastExpand = null;
+
+function bodyLines(text, w, max = 5) {
+  const raw = String(text ?? "").replace(/\s+$/, "");
+  if (!raw) return [];
+  const all = raw.split("\n");
+  const shown = all.slice(0, max).map((l) => C.gray(truncVis(sanitizeLine(l), w)));
+  if (all.length > max) {
+    lastExpand = { text: raw };
+    shown.push(C.gray(`… +${all.length - max} lines `) + C.cyan("ctrl+r") + C.gray(" to expand"));
+  }
+  return shown;
+}
+
+function resultLines(v) {
+  const w = Math.max(20, termCols() - 6);
+  switch (v?.card) {
+    case "terminal": {
+      const bad = v.exitCode !== undefined && v.exitCode !== 0;
+      const body = bodyLines(v.output === "(no output)" ? "" : v.output, w);
+      if (!body.length) return [bad ? C.red(`exit ${v.exitCode}`) : C.gray("(no output)")];
+      return bad ? [C.red(`exit ${v.exitCode}`), ...body] : body;
+    }
+    case "read": {
+      const n = (v.lines ?? []).length;
+      const of = v.totalLines && v.totalLines !== n ? ` of ${v.totalLines}` : "";
+      return [C.gray(`${n} line${n === 1 ? "" : "s"}${of} · ${truncVis(sanitizeLine(v.path ?? ""), w - 22)}`)];
+    }
+    case "search": {
+      const paths = v.paths ?? v.files ?? [];
+      const total = v.total ?? paths.length;
+      const head = C.gray(`${total} match${total === 1 ? "" : "es"}${v.truncated ? " (truncated)" : ""}`);
+      return [head, ...paths.slice(0, 3).map((x) => C.gray("  " + truncVis(sanitizeLine(typeof x === "string" ? x : x?.path ?? ""), w - 2)))];
+    }
+    case "diff": {
+      return (v.diffs ?? []).slice(0, 4).map((d) => {
+        const nl = (t) => (t == null ? null : String(t).split("\n").length);
+        const o = nl(d.oldText), n = nl(d.newText);
+        const what = o == null ? `wrote ${n ?? 0} lines`
+          : n == null ? `deleted ${o} lines`
+          : `${o} → ${n} lines`;
+        return C.gray(`${truncVis(sanitizeLine(d.path ?? "?"), w - 24)} `) + C.green(what);
+      });
+    }
+    case "web": {
+      if (v.kind === "search") {
+        const n = (v.sources ?? []).length;
+        return [C.gray(`${n} source${n === 1 ? "" : "s"} · ${truncVis(sanitizeLine(v.title ?? ""), w - 18)}`)];
+      }
+      const code = v.statusCode ?? "?";
+      const label = truncVis(sanitizeLine(v.title || v.url || ""), w - 12);
+      return [(String(code).startsWith("2") ? C.gray(String(code)) : C.red(String(code))) + C.gray(" · " + label)];
+    }
+    case "generic": {
+      const c = v.content;
+      const text = typeof c === "string" ? c
+        : Array.isArray(c) ? c.map((b) => (typeof b === "string" ? b : b?.text ?? "")).join("\n")
+        : c ? JSON.stringify(c) : "";
+      return bodyLines(text, w, 3);
+    }
+    default:
+      return [];
+  }
+}
 
 function refreshTitle() {
   const t = st.title || (st.sid ? shortId(st.sid) : "dsh");
@@ -200,6 +286,13 @@ function turnErrorHint(msg) {
   return null;
 }
 
+// Text only — a message whose blocks are all tool-calls has nothing to say at
+// this zoom; the ⏺ Tool(...) line already said it.
+function textOnly(blocks) {
+  if (!Array.isArray(blocks)) return "";
+  return blocks.filter((b) => b?.type === "text").map((b) => b.text).join("\n").trim();
+}
+
 function textOfBlocks(blocks) {
   if (!Array.isArray(blocks)) return "";
   return blocks
@@ -215,15 +308,17 @@ function renderEvent(event, view, live) {
   switch (type) {
     case "turn/start":
       st.turnOpen = true;
+      st.turnStart = Date.now();
       endStream();
-      out(C.dim(`── turn ${data?.turn} ──`));
-      break;
+      break; // the ⏺ bullets are the activity; a start banner is just noise
     case "turn/end": {
       st.turnOpen = false;
       endStream();
       const reason = data?.reason;
       const kind = reason?.kind ?? reason ?? "?";
-      out(C.dim(`── turn ${data?.turn} end (${kind}) ──`));
+      const secs = st.turnStart ? ` · ${((Date.now() - st.turnStart) / 1000).toFixed(1)}s` : "";
+      st.turnStart = null;
+      out(C.dim(`── turn ${data?.turn} · ${kind}${secs} ──`));
       if (kind === "error" && reason?.error) {
         const err = reason.error;
         out(C.red(`✖ ${sanitizeLine(err.message ?? "unknown error")}`) +
@@ -253,28 +348,42 @@ function renderEvent(event, view, live) {
     case "assistant/chunk": {
       if (!live) break; // history renders assembled messages only
       const ch = data?.chunk;
-      if (ch?.type === "text-delta") { emit(sanitize(ch.text)); st.midStream = true; }
+      if (ch?.type === "text-delta") {
+        // Models routinely open a tool-calling step with a whitespace-only
+        // message; don't spend a bullet and two blank lines on it.
+        const key = `${data?.turn}:${data?.step}`;
+        if (st.bulletStep !== key && ch.text.trim()) { st.bulletStep = key; emit(C.green("⏺ ")); }
+        if (st.bulletStep === key) { emit(sanitize(ch.text)); st.midStream = true; }
+      }
       st.streamedStep = `${data?.turn}:${data?.step}`;
       break;
     }
     case "assistant/message": {
       const key = `${data?.turn}:${data?.step}`;
       const usage = data?.usage ? C.gray(`  [${data.usage.outputTokens ?? "?"} out]`) : "";
-      if (live && st.streamedStep === key) { endStream(); if (usage) out(usage.trimStart()); }
-      else { endStream(); const t = textOfBlocks(data?.message?.content); if (t) out(trim1(t) + usage); }
+      if (live && st.streamedStep === key) { endStream(); }
+      else { endStream(); const t = textOnly(data?.message?.content); if (t) out(C.green("⏺ ") + trim1(t)); }
       st.streamedStep = null;
       break;
     }
     case "tool/call": {
       endStream();
-      const label = sanitizeLine(view?.title ? view.title : data?.name ?? "?");
-      let args = "";
-      if (!view?.title && data?.arguments) args = C.gray(" " + trim1(String(data.arguments), 100));
-      out(C.dim(`⚙ ${label}`) + args);
+      // NB: the event's view is {for, view} — reading view.title directly (as
+      // this did) always missed, which is why every call rendered as bare "bash".
+      const v = view?.view ?? {};
+      const { nm, arg } = toolLabel(data?.name, v.title ?? (data?.arguments ? String(data.arguments) : ""));
+      const room = Math.max(10, termCols() - visWidth(nm) - 6);
+      out(C.green("⏺ ") + C.bold(nm) + C.gray("(") + sanitizeLine(truncVis(arg, room)) + C.gray(")"));
       break;
     }
-    case "tool/result":
-      break; // result cards are browser fare; errors surface via stream/error
+    case "tool/result": {
+      endStream();
+      const lines = resultLines(view?.view);
+      if (!lines.length) break;
+      out(C.gray("  ⎿ ") + lines[0]);
+      for (const l of lines.slice(1)) out("    " + l);
+      break;
+    }
     default:
       if (type && !NOISE.has(type)) out(C.gray(`· ${type}`));
   }
@@ -338,7 +447,11 @@ function handleFrame(f, rpcId) {
         if (hint) out(C.yellow(`  ↳ ${hint}`));
       }
       break;
-    // session/subscribed, session/queue, session/jobs, session/projection: quiet at this zoom.
+    case "session/projection":
+      // one key per frame — contextPressure and tokenUsage land here live
+      if (mine && f.key) { st.proj[f.key] = f.value; if (region) region.schedule(); }
+      break;
+    // session/subscribed, session/queue, session/jobs: quiet at this zoom.
   }
 }
 
@@ -350,6 +463,8 @@ async function showHeader(item) {
   out(C.bold(`◍ ${sanitizeLine(st.title || "(untitled)")}`) + C.gray(`  ${shortId(st.sid)}  ${sanitizeLine(item?.cwd ?? "")}`));
   out(C.gray(`  ${item?.running ? "running" : "idle"}${RICH ? " · type to send · / for commands" : " · l sessions · m model · i prompt · s steer · c cancel · q quit"}`));
   st.turnOpen = !!item?.running;
+  st.turnStart = item?.running ? Date.now() : null;
+  st.proj = item?.projections?.values ?? {};
   st.pending.clear();
   refreshTitle();
 }
@@ -600,14 +715,25 @@ function pendingPanel() {
 
 let spinI = 0;
 let lastCtrlC = 0;
+function contextReadout() {
+  const cp = st.proj?.contextPressure;
+  if (!cp?.contextWindow) return "";
+  const used = cp.projectedTokens ?? cp.pressureTokens ?? 0;
+  const pct = Math.round((used / cp.contextWindow) * 100);
+  const col = pct >= 90 ? C.red : pct >= 70 ? C.yellow : C.gray;
+  return col(` · ctx ${pct}%`);
+}
 function statusRight() {
+  const el = st.turnOpen && st.turnStart ? ` ${Math.round((Date.now() - st.turnStart) / 1000)}s` : "";
   const state = st.pending.size ? C.red("blocked")
-    : st.turnOpen ? C.yellow(`${SPINNER[spinI % SPINNER.length]} working`)
+    : st.turnOpen ? C.yellow(`${SPINNER[spinI % SPINNER.length]} working${el}`)
     : C.green("idle");
   // provider prefixes are the same on every row of a lane's catalog — the model
   // and the effort are what actually change under you.
-  const m = lastModelLine ? lastModelLine.slice(lastModelLine.indexOf("/") + 1) : "";
-  return state + (m ? C.gray(" · " + truncVis(m, 34)) : "");
+  const m = lastModelLine
+    ? lastModelLine.slice(lastModelLine.indexOf("/") + 1).replace(" · effort ", " ")
+    : "";
+  return state + (m ? C.gray(" · " + truncVis(m, 30)) : "") + contextReadout();
 }
 // The right side (what the session is doing) outranks the key hints: truncate
 // the hints, never the state.
@@ -661,9 +787,10 @@ function regionLines(cols) {
   const lines = [bar("╭", "╮", C.gray)];
   for (const l of r.lines) lines.push(C.gray("│ ") + padVis(l, inner) + C.gray(" │"));
   lines.push(bar("╰", "╯", C.gray));
+  const expand = lastExpand ? " · ctrl+r expand" : "";
   lines.push(hintRow(cols, st.turnOpen
-    ? "enter steers into the running turn · /queue to line it up · esc interrupts"
-    : "/ commands · ↑ history · \\ + enter new line · ctrl+c ×2 quit"));
+    ? "enter steers into the running turn · /queue to line it up · esc interrupts" + expand
+    : "/ commands · ↑ history · \\ + enter new line · ctrl+c ×2 quit" + expand));
   return { lines, cursor: { row: r.cursor.row + 1, col: r.cursor.col + 2 } };
 }
 
@@ -678,12 +805,20 @@ const LOCAL_CMDS = {
   quit: "leave the pane (the session keeps running)",
 };
 
+function expandLast() {
+  if (!lastExpand) return out(C.gray("(nothing truncated to expand)"));
+  const w = Math.max(20, termCols() - 6);
+  out(C.gray("  ⎿ (expanded)"));
+  for (const l of String(lastExpand.text).split("\n")) out("    " + C.gray(truncVis(sanitizeLine(l), w)));
+}
+
 function localHelp() {
   out("");
   out(C.bold("─ podsh ─"));
   out(C.gray("  just type · enter sends · \\ + enter (or alt+enter) for a new line"));
   out(C.gray("  ↑/↓ history · ctrl+a/e home/end · ctrl+w/u/k delete · ctrl+l clear"));
   out(C.gray("  esc interrupts a running turn (clears the box first) · ctrl+c ×2 quits"));
+  out(C.gray("  ctrl+r re-prints the last truncated tool result in full"));
   for (const [k, v] of Object.entries(LOCAL_CMDS)) out("  " + padVis(C.cyan("/" + k), 12) + C.gray(v));
   out(C.gray("  any other /command goes to the host (compact · plan · permission · goal · export · feedback)"));
 }
@@ -747,6 +882,8 @@ function routeKey(k) {
     if (/[1-9]/.test(k.text)) answerQuestion(parseInt(k.text, 10));
     return;
   }
+
+  if (k.ctrl && k.name === "r") return expandLast();
 
   const action = editor.handle(k);
   if (!action) return;
