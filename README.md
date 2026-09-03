@@ -114,13 +114,15 @@ mode to enter first.
 - **`/` commands**: `/new` starts a **fresh session with empty context** in the
   same cwd (`/new <dir>` picks another one) and attaches the pane to it — the
   host has no `new` command of its own, so this is the only way to start one
-  without the browser. `/sessions` flips between sessions (no reconnect — the
-  event mux carries them all), `/model` is the **model + thinking-effort picker**
+  without the browser. `/sessions` flips between sessions — **↑/↓ + enter**,
+  and the numbers still jump — with no reconnect (the event mux carries them
+  all), `/model` is the **model + thinking-effort picker**
   (the DeepSeek adapter exposes `off/high/max`), plus `/lanes`, `/cancel`,
   `/clear`, `/help`. Anything else is handed to the host: `/compact`, `/plan`,
   `/permission`, `/goal`, `/export`, `/feedback`.
 - **`--plain`** keeps the older modal keys (`l` `N` `m` `i` `s` `c` · `y`/`n` · `1-9`)
-  for terminals that can't take the composer; piping the output is unchanged.
+  for terminals that can't take the composer — its pickers stay number + enter,
+  since there is no region to draw a highlight into; piping is unchanged.
 
 The browser tab and the terminal pane are **two live faces of one session** —
 the host fans events out to every connected client and sessions have no owner.

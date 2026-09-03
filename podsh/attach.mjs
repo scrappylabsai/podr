@@ -194,6 +194,7 @@ const st = {
 };
 
 const termCols = () => Math.max(40, process.stdout.columns || 100);
+const termRows = () => Math.max(6, process.stdout.rows || 24);
 
 // ---------- tool cards ----------
 // The host already renders each event into a typed card (terminal / read /
@@ -547,13 +548,22 @@ async function newSession(dir) {
   await attachTo(created.sessionId, [newItem(created.sessionId, cwd, created.agentPreset ?? st.preset)]);
 }
 
-// ---------- session picker (raw-mode digits) ----------
-let pickerBuf = null; // null = inactive; string = digits so far
+// ---------- session picker ----------
+// In rich mode the list lives INSIDE the bottom region, so ↑/↓ can move a
+// highlight — scrollback can't be repainted, a region can. --plain keeps the
+// printed list and the typed number, because there is no region to draw into.
+let pickerBuf = null;  // null = inactive; string = digits typed so far
 let pickerItems = [];
+let pickerSel = 0;     // highlighted row
 async function openPicker() {
   const { items } = await rpc("session.list");
   pickerItems = items.slice(0, 15);
+  if (!pickerItems.length) return out(C.gray("(no sessions — /new starts one)"));
   endStream();
+  // Start on the session we are already attached to: ↑/↓ from where you stand.
+  pickerSel = Math.max(0, pickerItems.findIndex((i) => i.sessionId === st.sid));
+  pickerBuf = "";
+  if (region) return region.schedule();
   out("");
   out(C.bold("─ sessions ─ (number + Enter, Esc cancels)"));
   pickerItems.forEach((it, i) => {
@@ -561,21 +571,53 @@ async function openPicker() {
     const cur = it.sessionId === st.sid ? C.cyan("← here") : "";
     out(` ${String(i + 1).padStart(2)} ${dot} ${trim1(String(titleOf(it)), 60)} ${C.gray(shortId(it.sessionId))} ${C.gray(it.cwd ?? "")} ${cur}`);
   });
-  pickerBuf = "";
+}
+
+// The visible slice, scrolled to keep the highlight on screen. The region trims
+// from the TOP when it overflows, which would eat the panel's own header, so the
+// panel has to fit itself to the terminal rather than let that happen.
+function pickerWindow() {
+  const total = pickerItems.length;
+  const vis = Math.max(3, Math.min(total, termRows() - 6));
+  const start = Math.min(Math.max(0, pickerSel - (vis >> 1)), Math.max(0, total - vis));
+  return { start, end: Math.min(total, start + vis), total };
+}
+
+function pickerMove(d) {
+  const n = pickerItems.length;
+  if (!n) return;
+  pickerSel = (pickerSel + d + n) % n;   // wrap: 15 rows is a ring, not a cliff
+  pickerBuf = "";                        // a typed number is abandoned by moving
+  region?.schedule();
+}
+
+function pickerChoose() {
+  const it = pickerItems[pickerSel];
+  pickerBuf = null;
+  if (!it) return out(C.gray("(no such session)"));
+  if (it.sessionId === st.sid) return out(C.gray("(already here)"));
+  attachTo(it.sessionId).catch((e) => out(C.red(e.message)));
 }
 
 function pickerKey(ch) {
-  if (ch === "\x1b") { pickerBuf = null; out(C.gray("(cancelled)")); return; }
+  if (ch === "\x1b") { pickerBuf = null; out(C.gray("(cancelled)")); region?.schedule(); return; }
   if (ch === "\r" || ch === "\n") {
     if (!region) out(""); // move off the echoed-digits line
-    const n = parseInt(pickerBuf, 10);
-    pickerBuf = null;
-    const it = pickerItems[n - 1];
-    if (!it) { out(C.gray("(no such session)")); return; }
-    attachTo(it.sessionId).catch((e) => out(C.red(e.message)));
-    return;
+    // Plain mode has no highlight to read, so the typed number still decides.
+    if (!region) pickerSel = parseInt(pickerBuf, 10) - 1;
+    return pickerChoose();
   }
-  if (/[0-9]/.test(ch)) { pickerBuf += ch; if (region) region.schedule(); else process.stdout.write(ch); }
+  if (!/[0-9]/.test(ch)) return;
+  if (!region) { pickerBuf += ch; process.stdout.write(ch); return; }  // plain: echo, parse at enter
+  // Digits still address a row directly — "1" then "5" walks to 15, exactly as
+  // before — they just move the highlight now instead of filling a field. A digit
+  // that cannot extend the run starts a new one.
+  const grown = parseInt(pickerBuf + ch, 10);
+  const fresh = parseInt(ch, 10);
+  if (grown >= 1 && grown <= pickerItems.length) { pickerBuf += ch; pickerSel = grown - 1; }
+  else if (fresh >= 1 && fresh <= pickerItems.length) { pickerBuf = ch; pickerSel = fresh - 1; }
+  else pickerBuf = "";
+  region.schedule();
 }
 
 // ---------- in-pane input (v0.5 uplink) ----------
@@ -812,14 +854,38 @@ function regionLines(cols) {
     return { lines };
   }
 
-  if (mp || pickerBuf !== null) {
-    const label = mp ? (mp.stage === "effort" ? "effort" : "model") : "session";
-    const buf = mp ? mp.buf : pickerBuf;
+  if (pickerBuf !== null) {
+    const { start, end, total } = pickerWindow();
+    const lines = [bar("╭", "╮", C.cyan)];
+    const row = (t) => lines.push(C.cyan("│ ") + padVis(t, inner) + C.cyan(" │"));
+    row(C.bold("sessions") + C.gray(`  ${pickerSel + 1}/${total}`) +
+        (start > 0 ? C.gray("  ↑ more") : "") + (end < total ? C.gray("  ↓ more") : ""));
+    for (let i = start; i < end; i++) {
+      const it = pickerItems[i];
+      const on = i === pickerSel;
+      const num = `${on ? "▸" : " "} ${String(i + 1).padStart(2)} `;
+      const here = it.sessionId === st.sid ? " ← here" : "";
+      const id = shortId(it.sessionId);
+      // Widths are measured on the PLAIN text, then each piece is coloured — a
+      // reset inside a bolded span would end the bold early.
+      const avail = Math.max(8, inner - visWidth(num) - 2 - here.length - id.length - 2);
+      const t = truncVis(sanitizeLine(String(titleOf(it))), Math.min(44, Math.max(8, Math.round(avail * 0.6))));
+      const cwd = truncVis(sanitizeLine(it.cwd ?? ""), Math.max(0, avail - visWidth(t)));
+      row((on ? C.cyan(num) : C.gray(num)) + (it.running ? C.green("●") : C.gray("○")) + " " +
+          (on ? C.bold(t) : t) + " " + C.gray(`${id} ${cwd}`) + (on ? C.cyan(here) : C.gray(here)));
+    }
+    lines.push(bar("╰", "╯", C.cyan));
+    lines.push(hintRow(cols, "↑↓ move · enter attaches · digits jump · esc cancels"));
+    return { lines };
+  }
+
+  if (mp) {
+    const label = mp.stage === "effort" ? "effort" : "model";
     const pre = `  ${label} (from the list above) `;
     return {
-      lines: [C.gray("  ") + C.bold(label) + C.gray(" (from the list above) ") + C.cyan("❯ ") + buf,
+      lines: [C.gray("  ") + C.bold(label) + C.gray(" (from the list above) ") + C.cyan("❯ ") + mp.buf,
               hintRow(cols, "number + enter · esc cancels")],
-      cursor: { row: 0, col: visWidth(pre) + 2 + visWidth(buf) },
+      cursor: { row: 0, col: visWidth(pre) + 2 + visWidth(mp.buf) },
     };
   }
 
@@ -838,7 +904,7 @@ function regionLines(cols) {
 const LOCAL_CMDS = {
   help: "this list",
   new: "/new [dir] — fresh session, empty context (same cwd unless you name one)",
-  sessions: "pick a session on this host",
+  sessions: "pick a session on this host (↑↓ + enter)",
   model: "pick model + thinking effort",
   lanes: "which dsh hosts are up, and what each serves",
   queue: "/queue <text> — line it up instead of steering the running turn",
@@ -911,7 +977,14 @@ const asChar = (k) =>
 
 function routeKey(k) {
   if (mp) { const ch = asChar(k); if (ch) mpKey(ch); return; }
-  if (pickerBuf !== null) { const ch = asChar(k); if (ch) pickerKey(ch); return; }
+  if (pickerBuf !== null) {
+    if (k.name === "up" || (k.ctrl && k.name === "p")) return pickerMove(-1);
+    if (k.name === "down" || (k.ctrl && k.name === "n")) return pickerMove(1);
+    if (k.name === "home") { pickerSel = 0; pickerBuf = ""; return region?.schedule(); }
+    if (k.name === "end") { pickerSel = pickerItems.length - 1; pickerBuf = ""; return region?.schedule(); }
+    const ch = asChar(k); if (ch) pickerKey(ch);
+    return;
+  }
 
   const p = pendingPanel();
   if (p && (p.kind === "approval" || p.answerable)) {
