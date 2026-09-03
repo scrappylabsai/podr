@@ -552,18 +552,30 @@ async function newSession(dir) {
 // In rich mode the list lives INSIDE the bottom region, so ↑/↓ can move a
 // highlight — scrollback can't be repainted, a region can. --plain keeps the
 // printed list and the typed number, because there is no region to draw into.
-let pickerBuf = null;  // null = inactive; string = digits typed so far
-let pickerItems = [];
+let pickerBuf = null;  // null = inactive; "" in rich mode, typed digits in --plain
+let pickerAll = [];    // everything the host listed
+let pickerItems = [];  // what the filter left, and what pickerSel indexes
 let pickerSel = 0;     // highlighted row
+let pickerEd = null;   // rich mode: the filter field under the list
 async function openPicker() {
   const { items } = await rpc("session.list");
-  pickerItems = items.slice(0, 15);
-  if (!pickerItems.length) return out(C.gray("(no sessions — /new starts one)"));
+  if (!items.length) return out(C.gray("(no sessions — /new starts one)"));
   endStream();
-  // Start on the session we are already attached to: ↑/↓ from where you stand.
-  pickerSel = Math.max(0, pickerItems.findIndex((i) => i.sessionId === st.sid));
   pickerBuf = "";
-  if (region) return region.schedule();
+  if (region) {
+    // Rich mode keeps the input box — it just stops being the composer and
+    // becomes a filter, which is what makes the whole list usable instead of
+    // the fifteen rows a typed number could address.
+    pickerAll = items;
+    pickerEd = new LineEditor({});
+    pickerItems = items;
+    pickerSel = Math.max(0, items.findIndex((i) => i.sessionId === st.sid));
+    return region.schedule();
+  }
+  // --plain has no region to draw a highlight or a field into: printed list,
+  // number + enter, exactly as it always was.
+  pickerAll = pickerItems = items.slice(0, 15);
+  pickerSel = Math.max(0, pickerItems.findIndex((i) => i.sessionId === st.sid));
   out("");
   out(C.bold("─ sessions ─ (number + Enter, Esc cancels)"));
   pickerItems.forEach((it, i) => {
@@ -573,12 +585,28 @@ async function openPicker() {
   });
 }
 
+// Every whitespace-separated term must appear somewhere in the row: title, short
+// id or cwd. Plain substrings, so what you type is what it looks for.
+function pickerFilter() {
+  const q = pickerEd.value().trim().toLowerCase();
+  const keep = pickerSel >= 0 ? pickerItems[pickerSel]?.sessionId : null;
+  const terms = q ? q.split(/\s+/) : [];
+  pickerItems = !terms.length ? pickerAll : pickerAll.filter((it) => {
+    const hay = `${titleOf(it)} ${shortId(it.sessionId)} ${it.cwd ?? ""}`.toLowerCase();
+    return terms.every((t) => hay.includes(t));
+  });
+  // Stay on the same session while it survives the filter; otherwise go to the top.
+  const at = keep ? pickerItems.findIndex((i) => i.sessionId === keep) : -1;
+  pickerSel = at === -1 ? 0 : at;
+  region?.schedule();
+}
+
 // The visible slice, scrolled to keep the highlight on screen. The region trims
 // from the TOP when it overflows, which would eat the panel's own header, so the
 // panel has to fit itself to the terminal rather than let that happen.
 function pickerWindow() {
   const total = pickerItems.length;
-  const vis = Math.max(3, Math.min(total, termRows() - 6));
+  const vis = Math.max(3, Math.min(total, termRows() - 8));
   const start = Math.min(Math.max(0, pickerSel - (vis >> 1)), Math.max(0, total - vis));
   return { start, end: Math.min(total, start + vis), total };
 }
@@ -591,16 +619,18 @@ function pickerMove(d) {
   region?.schedule();
 }
 
+function pickerClose() { pickerBuf = null; pickerEd = null; pickerAll = pickerItems = []; }
+
 function pickerChoose() {
   const it = pickerItems[pickerSel];
-  pickerBuf = null;
+  pickerClose();
   if (!it) return out(C.gray("(no such session)"));
   if (it.sessionId === st.sid) return out(C.gray("(already here)"));
   attachTo(it.sessionId).catch((e) => out(C.red(e.message)));
 }
 
 function pickerKey(ch) {
-  if (ch === "\x1b") { pickerBuf = null; out(C.gray("(cancelled)")); region?.schedule(); return; }
+  if (ch === "\x1b") { pickerClose(); out(C.gray("(cancelled)")); return; }
   if (ch === "\r" || ch === "\n") {
     if (!region) out(""); // move off the echoed-digits line
     // Plain mode has no highlight to read, so the typed number still decides.
@@ -858,8 +888,11 @@ function regionLines(cols) {
     const { start, end, total } = pickerWindow();
     const lines = [bar("╭", "╮", C.cyan)];
     const row = (t) => lines.push(C.cyan("│ ") + padVis(t, inner) + C.cyan(" │"));
-    row(C.bold("sessions") + C.gray(`  ${pickerSel + 1}/${total}`) +
+    const q = pickerEd.value().trim();
+    row(C.bold("sessions") + C.gray(`  ${total ? pickerSel + 1 : 0}/${total}`) +
+        (q ? C.gray(`  of ${pickerAll.length}`) : "") +
         (start > 0 ? C.gray("  ↑ more") : "") + (end < total ? C.gray("  ↓ more") : ""));
+    if (!total) row(C.gray("   nothing matches — backspace to widen"));
     for (let i = start; i < end; i++) {
       const it = pickerItems[i];
       const on = i === pickerSel;
@@ -874,9 +907,15 @@ function regionLines(cols) {
       row((on ? C.cyan(num) : C.gray(num)) + (it.running ? C.green("●") : C.gray("○")) + " " +
           (on ? C.bold(t) : t) + " " + C.gray(`${id} ${cwd}`) + (on ? C.cyan(here) : C.gray(here)));
     }
+    // The input box stays — as the filter. Same shape as the composer, so it
+    // reads as the same box doing a different job.
+    lines.push(bar("├", "┤", C.cyan));
+    const r = pickerEd.render(inner, C.cyan("⌕ "), "  ");
+    const editorTop = lines.length;
+    for (const l of r.lines) lines.push(C.cyan("│ ") + padVis(l, inner) + C.cyan(" │"));
     lines.push(bar("╰", "╯", C.cyan));
-    lines.push(hintRow(cols, "↑↓ move · enter attaches · digits jump · esc cancels"));
-    return { lines };
+    lines.push(hintRow(cols, "↑↓ move · type to filter · enter attaches · esc cancels"));
+    return { lines, cursor: { row: editorTop + r.cursor.row, col: r.cursor.col + 2 } };
   }
 
   if (mp) {
@@ -904,7 +943,7 @@ function regionLines(cols) {
 const LOCAL_CMDS = {
   help: "this list",
   new: "/new [dir] — fresh session, empty context (same cwd unless you name one)",
-  sessions: "pick a session on this host (↑↓ + enter)",
+  sessions: "pick a session on this host (↑↓ · type to filter · enter)",
   model: "pick model + thinking effort",
   lanes: "which dsh hosts are up, and what each serves",
   queue: "/queue <text> — line it up instead of steering the running turn",
@@ -980,9 +1019,15 @@ function routeKey(k) {
   if (pickerBuf !== null) {
     if (k.name === "up" || (k.ctrl && k.name === "p")) return pickerMove(-1);
     if (k.name === "down" || (k.ctrl && k.name === "n")) return pickerMove(1);
-    if (k.name === "home") { pickerSel = 0; pickerBuf = ""; return region?.schedule(); }
-    if (k.name === "end") { pickerSel = pickerItems.length - 1; pickerBuf = ""; return region?.schedule(); }
-    const ch = asChar(k); if (ch) pickerKey(ch);
+    // Everything else edits the filter — home/end/ctrl+w/ctrl+u included, which
+    // is why the list no longer claims them.
+    const act = pickerEd.handle(k);
+    if (act === "submit") return pickerChoose();
+    if (act === "escape" || act === "interrupt" || act === "eof") {
+      pickerClose(); out(C.gray("(cancelled)")); return;
+    }
+    if (act === "clear-screen") return region.clearScreen();
+    pickerFilter();
     return;
   }
 

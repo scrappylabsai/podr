@@ -114,9 +114,9 @@ mode to enter first.
 - **`/` commands**: `/new` starts a **fresh session with empty context** in the
   same cwd (`/new <dir>` picks another one) and attaches the pane to it — the
   host has no `new` command of its own, so this is the only way to start one
-  without the browser. `/sessions` flips between sessions — **↑/↓ + enter**,
-  and the numbers still jump — with no reconnect (the event mux carries them
-  all), `/model` is the **model + thinking-effort picker**
+  without the browser. `/sessions` flips between sessions with no reconnect
+  (the event mux carries them all) — the input box **stays**, as a filter: type
+  to narrow the list, ↑/↓ to move, enter attaches. `/model` is the **model + thinking-effort picker**
   (the DeepSeek adapter exposes `off/high/max`), plus `/lanes`, `/cancel`,
   `/clear`, `/help`. Anything else is handed to the host: `/compact`, `/plan`,
   `/permission`, `/goal`, `/export`, `/feedback`.
