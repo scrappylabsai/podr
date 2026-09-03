@@ -15,6 +15,7 @@
 import { spawn } from "node:child_process";
 import { openSync, closeSync, readFileSync, appendFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
+import { resolve } from "node:path";
 import { probeLanes, laneServes, findLaneFor, renderLanes } from "./lanes.mjs";
 import { Region, LineEditor, KeyDecoder, SPINNER, visWidth, truncVis, padVis } from "./ui.mjs";
 
@@ -154,13 +155,33 @@ const shortId = (sid) => String(sid).replace(/^session-/, "").slice(0, 8);
 
 async function pickDefaultSession() {
   const { items } = await rpc("session.list");
-  if (!items.length) throw new Error("no sessions on host — start one in the browser first");
+  if (!items.length) {
+    // A fresh host has nothing to tail. Make the first session here rather than
+    // sending the user to the browser for the one thing the pane can do itself.
+    const cwd = process.cwd();
+    out(C.gray(`no sessions on ${opt.host} — starting one in ${sanitizeLine(cwd)}`));
+    const created = await rpc("session.create", { cwd });
+    return { sid: created.sessionId, items: [newItem(created.sessionId, cwd, created.agentPreset)] };
+  }
   return { sid: items[0].sessionId, items };
+}
+
+// The session.list shape attachTo needs, for a session too young to be listed.
+const newItem = (sid, cwd, agentPreset) =>
+  ({ sessionId: sid, cwd, agentPreset, running: false, title: "(new session)" });
+
+// `~` is expanded HERE: the host takes cwd verbatim and will cheerfully create a
+// directory literally named "~" (there is one on this fleet's host to prove it).
+function expandDir(d) {
+  const s = String(d).trim();
+  return resolve(s === "~" ? homedir() : s.startsWith("~/") ? homedir() + s.slice(1) : s);
 }
 
 // ---------- renderer ----------
 const st = {
   sid: null,          // attached session id
+  cwd: null,          // its cwd, and its agent preset: what /new inherits
+  preset: null,
   turnOpen: false,
   pending: new Map(), // approvalId/questionKey -> label (blocked while non-empty)
   title: "",
@@ -461,10 +482,12 @@ async function showHeader(item) {
   st.title = typeof title === "string" ? title : "";
   out("");
   out(C.bold(`◍ ${sanitizeLine(st.title || "(untitled)")}`) + C.gray(`  ${shortId(st.sid)}  ${sanitizeLine(item?.cwd ?? "")}`));
-  out(C.gray(`  ${item?.running ? "running" : "idle"}${RICH ? " · type to send · / for commands" : " · l sessions · m model · i prompt · s steer · c cancel · q quit"}`));
+  out(C.gray(`  ${item?.running ? "running" : "idle"}${RICH ? " · type to send · / for commands" : " · l sessions · N new · m model · i prompt · s steer · c cancel · q quit"}`));
   st.turnOpen = !!item?.running;
   st.turnStart = item?.running ? Date.now() : null;
   st.proj = item?.projections?.values ?? {};
+  st.cwd = item?.cwd ?? null;
+  st.preset = item?.agentPreset ?? null;
   st.pending.clear();
   refreshTitle();
 }
@@ -504,6 +527,24 @@ async function attachTo(sid, items) {
     out(C.yellow(`history unavailable: ${e.message}`));
   }
   refreshTitle();
+}
+
+// ---------- new session ----------
+// The pane could flip between sessions but never START one: /sessions only lists
+// what exists, and the host's command registry has no `new` (compact · export ·
+// feedback · goal · permission · plan), so "same project, fresh context" meant
+// going back to the browser tab. session.create is the RPC `podsh send --new`
+// already uses; attaching afterwards is just re-pointing st.sid, because the
+// event mux is subscribe-all. The old session keeps running.
+async function newSession(dir) {
+  const cwd = dir ? expandDir(dir) : (st.cwd || process.cwd());
+  out(C.gray(`new session in ${sanitizeLine(cwd)}…`));
+  const payload = { cwd };
+  // Keep the agent this session was built from; drop only its history.
+  if (st.preset) payload.agentPreset = st.preset;
+  const created = await rpc("session.create", payload);
+  if (!created?.sessionId) throw new Error("host returned no sessionId");
+  await attachTo(created.sessionId, [newItem(created.sessionId, cwd, created.agentPreset ?? st.preset)]);
 }
 
 // ---------- session picker (raw-mode digits) ----------
@@ -796,6 +837,7 @@ function regionLines(cols) {
 
 const LOCAL_CMDS = {
   help: "this list",
+  new: "/new [dir] — fresh session, empty context (same cwd unless you name one)",
   sessions: "pick a session on this host",
   model: "pick model + thinking effort",
   lanes: "which dsh hosts are up, and what each serves",
@@ -838,6 +880,7 @@ function submitText(text, mode) {
     const arg = sp === -1 ? "" : t.slice(sp + 1).trim();
     switch (word) {
       case "help": case "?": return localHelp();
+      case "new": newSession(arg).catch((e) => out(C.red(`new session failed: ${e.message}`))); return;
       case "session": case "sessions": openPicker().catch((e) => out(C.red(e.message))); return;
       case "model": case "models": openModelPicker().catch((e) => out(C.red(e.message))); return;
       case "lanes": showLanes(); return;
@@ -933,6 +976,7 @@ function plainKeys(chunk) {
     if (pickerBuf !== null) { pickerKey(ch); continue; }
     if (ch === "q" || ch === "\x03") return quit(0);
     if (ch === "l") openPicker().catch((e) => out(C.red(e.message)));
+    else if (ch === "N") newSession().catch((e) => out(C.red(e.message)));
     else if (ch === "i") openInput("queue");
     else if (ch === "s") openInput("steer");
     else if (ch === "c") cancelTurn();
@@ -975,7 +1019,7 @@ async function main() {
   out(C.gray(`podsh attach · host ${opt.host} · ${items.length} sessions${runningN ? ` (${runningN} running)` : ""}`));
   out(RICH
     ? C.gray(`just type · enter sends (steers into a running turn) · alt+enter queues instead · / commands · ↑ history · esc interrupt · ctrl+c ×2 quit`)
-    : C.gray(`keys: l sessions · m model/effort · i prompt · s steer(into running turn) · c cancel turn · y/n approvals · 1-9 questions · q quit · "/"=host cmd`));
+    : C.gray(`keys: l sessions · N new · m model/effort · i prompt · s steer(into running turn) · c cancel turn · y/n approvals · 1-9 questions · q quit · "/"=host cmd`));
   await attachTo(sid, items);
 
   // keys
