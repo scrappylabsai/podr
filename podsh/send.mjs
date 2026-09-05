@@ -56,6 +56,25 @@ const BASE = `http://${HOST}`;
 const sanitize = (s) => String(s).replace(/[\x00-\x1f\x7f\x9b]/g, " ");
 const short = (sid) => String(sid).replace(/^session-/, "").slice(0, 8);
 
+// dsh 0.1.1-rc.2 added a REQUIRED `images` parameter to commands/execute
+// (typert gateway validates exactly: a missing field AND an extra one both
+// throw "args fields do not match the descriptor"). rc.6 has no such parameter,
+// so we send it and fall back once per process for older hosts.
+let cmdImagesSupported = null;
+async function execCommand(sid, line) {
+  if (cmdImagesSupported !== false) {
+    try {
+      const v = await rpc("commands/execute", { args: { agentId: sid, line, images: [] } });
+      cmdImagesSupported = true;
+      return v;
+    } catch (e) {
+      if (cmdImagesSupported === true || !/unexpected\s+"images"/.test(e?.message ?? "")) throw e;
+      cmdImagesSupported = false;
+    }
+  }
+  return rpc("commands/execute", { args: { agentId: sid, line } });
+}
+
 async function rpc(method, payload = {}) {
   const r = await fetch(`${BASE}/api/${method}`, {
     method: "POST",
@@ -133,7 +152,7 @@ if (!TEXT) { console.error("podsh send: nothing to send (pass text, or --cancel/
 
 if (TEXT.startsWith("/")) {
   // Host command path — session.prompt leaks "/" text to the model on rc.6.
-  const v = await rpc("commands/execute", { args: { agentId: sid, line: TEXT } });
+  const v = await execCommand(sid, TEXT);
   console.log(`(${v?.result?.kind ?? "?"}) ${sanitize(v?.result?.text ?? "")}`);
   process.exit(v?.result?.kind === "error" ? 1 : 0);
 }

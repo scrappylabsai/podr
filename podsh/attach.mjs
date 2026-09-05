@@ -93,6 +93,25 @@ function setTitle(t) {
 }
 
 // ---------- RPC ----------
+// dsh 0.1.1-rc.2 added a REQUIRED `images` parameter to commands/execute
+// (typert gateway validates exactly: a missing field AND an extra one both
+// throw "args fields do not match the descriptor"). rc.6 has no such parameter,
+// so we send it and fall back once per process for older hosts.
+let cmdImagesSupported = null;
+async function execCommand(sid, line) {
+  if (cmdImagesSupported !== false) {
+    try {
+      const v = await rpc("commands/execute", { args: { agentId: sid, line, images: [] } });
+      cmdImagesSupported = true;
+      return v;
+    } catch (e) {
+      if (cmdImagesSupported === true || !/unexpected\s+"images"/.test(e?.message ?? "")) throw e;
+      cmdImagesSupported = false;
+    }
+  }
+  return rpc("commands/execute", { args: { agentId: sid, line } });
+}
+
 async function rpc(method, payload = {}, { timeoutMs = 10000 } = {}) {
   const r = await fetch(`${BASE}/api/${method}`, {
     method: "POST",
@@ -669,7 +688,7 @@ function closeInput(send) {
   if (send && text.trim().startsWith("/")) {
     // Host command — session.prompt does NOT dispatch these on rc.6 (leaks to
     // the model as text, proven live 08-19); commands/execute is the real path.
-    rpc("commands/execute", { args: { agentId: st.sid, line: text.trim() } })
+    execCommand(st.sid, text.trim())
       .then((v) => out(C.gray(`(${v?.result?.kind ?? "?"}) ${sanitizeLine(v?.result?.text ?? "")}`)))
       .catch((e) => out(C.red(`command failed: ${e.message}`)))
       .finally(flush);
@@ -997,7 +1016,7 @@ function submitText(text, mode) {
     // Anything else is the host's: session.prompt does NOT dispatch commands on
     // rc.6 (it leaks them to the model as text) — commands/execute is the path.
     out(C.cyan("/" + word) + (arg ? C.gray(" " + sanitizeLine(arg)) : ""));
-    rpc("commands/execute", { args: { agentId: st.sid, line: t } })
+    execCommand(st.sid, t)
       .then((v) => out(C.gray(`(${v?.result?.kind ?? "ok"}) ${sanitizeLine(v?.result?.text ?? "")}`)))
       .catch((e) => out(C.red(`command failed: ${e.message}`)));
     return;
