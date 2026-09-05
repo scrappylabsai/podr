@@ -17,7 +17,7 @@ import { openSync, closeSync, readFileSync, appendFileSync, mkdirSync } from "no
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import { probeLanes, laneServes, findLaneFor, renderLanes } from "./lanes.mjs";
-import { Region, LineEditor, KeyDecoder, SPINNER, visWidth, truncVis, padVis } from "./ui.mjs";
+import { Region, LineEditor, KeyDecoder, SPINNER, visWidth, truncVis, padVis, wrap } from "./ui.mjs";
 
 // ---------- args ----------
 const argv = process.argv.slice(2);
@@ -468,13 +468,14 @@ function handleFrame(f, rpcId) {
         // resolved clears the blocked state early (resolved frames mint fresh rpcIds,
         // so per-question matching isn't possible from this frame alone).
         st.pending.set(`q`, { kind: "question", rpcId, questions: f.questions ?? [] });
+        qSel = new Set(); qSelKey = rpcId;
         const q = (f.questions ?? []).map((x) => x?.question).filter(Boolean).join(" | ");
         out(C.red(C.bold(`⏸ QUESTION`)) + ` — ${trim1(q || "(see browser)", 300)}`);
         refreshTitle();
       }
       break;
     case "question/resolved":
-      if (mine && st.pending.delete("q")) { out(C.green("✔ question answered")); refreshTitle(); }
+      if (mine && st.pending.delete("q")) { qSel = new Set(); qSelKey = null; out(C.green("✔ question answered")); refreshTitle(); }
       break;
     case "session/title":
       if (mine && f.title) { st.title = f.title; refreshTitle(); }
@@ -738,13 +739,50 @@ function answerApproval(outcome) {
     })
     .catch((e) => out(C.red(`respond failed: ${e.message}`)));
 }
+// Multi-select is a toggle set rather than an instant send, so single-select
+// keeps its one-keypress reflex. Keyed by rpcId so a new question starts clean.
+let qSel = new Set();
+let qSelKey = null;
+function questionSel(rpcId) {
+  if (qSelKey !== rpcId) { qSel = new Set(); qSelKey = rpcId; }
+  return qSel;
+}
+function submitQuestion() {
+  const p = firstPending("question");
+  if (!p) return false;
+  const q = p.questions[0];
+  if (p.questions.length !== 1 || !q?.multiSelect || !q?.options?.length) return false;
+  const labels = [...questionSel(p.rpcId)].sort((a, b) => a - b)
+    .map((i) => q.options[i]?.label).filter(Boolean);
+  if (!labels.length) { out(C.gray("(nothing selected — 1-9 toggles, enter submits)")); return true; }
+  respond(p.rpcId, { sessionId: st.sid, answer: { answers: [{ id: q.id, selected: labels }] } })
+    .then((rc) => {
+      if (rc.accepted) out(C.gray(`(answered: ${sanitizeLine(labels.join(", "))})`));
+      else out(C.gray(`(not pending — likely answered in the browser [${rc.reason ?? "?"}])`));
+    })
+    .catch((e) => out(C.red(`respond failed: ${e.message}`)));
+  return true;
+}
+function clearQuestionSel() {
+  const p = firstPending("question");
+  if (!p || !p.questions?.[0]?.multiSelect) return false;
+  questionSel(p.rpcId).clear();
+  region?.schedule();
+  return true;
+}
 function answerQuestion(n) {
   const p = firstPending("question");
   if (!p) return false;
   const q = p.questions[0];
-  if (p.questions.length !== 1 || q?.multiSelect || !q?.options?.length) return false;
+  if (p.questions.length !== 1 || !q?.options?.length) return false;
   const o = q.options[n - 1];
   if (!o) { out(C.gray("(no such option)")); return true; }
+  if (q.multiSelect) {
+    const sel = questionSel(p.rpcId);
+    if (sel.has(n - 1)) sel.delete(n - 1); else sel.add(n - 1);
+    region?.schedule();
+    return true;
+  }
   respond(p.rpcId, { sessionId: st.sid, answer: { answers: [{ id: q.id, selected: [o.label] }] } })
     .then((rc) => {
       if (rc.accepted) out(C.gray(`(answered: ${sanitizeLine(o.label)})`));
@@ -840,7 +878,7 @@ function pendingPanel() {
   const qn = firstPending("question");
   if (qn) {
     const q = qn.questions?.[0];
-    return { kind: "question", qn, q, answerable: qn.questions?.length === 1 && !q?.multiSelect && !!q?.options?.length };
+    return { kind: "question", qn, q, answerable: qn.questions?.length === 1 && !!q?.options?.length };
   }
   return null;
 }
@@ -893,12 +931,44 @@ function regionLines(cols) {
       lines.push(bar("╰", "╯", C.red));
       lines.push(hintRow(cols, "y/1 allow · n/2 reject · the browser tab can answer too"));
     } else {
-      row(C.bold("⏸ question") + C.gray("  " + truncVis(sanitizeLine(p.q?.question ?? ""), Math.max(4, inner - 14))));
-      row("");
-      for (const [i, o] of (p.q.options ?? []).slice(0, 9).entries())
-        row(C.cyan(` ${i + 1}`) + " " + truncVis(sanitizeLine(o?.label ?? String(o)), Math.max(4, inner - 4)));
+      // The wire carries header/detail/options[].description/multiSelect; render
+      // them instead of a truncated one-liner. The region trims from the TOP on
+      // overflow (it would eat this panel's own header), so spend a row budget.
+      const q = p.q ?? {};
+      const opts = (q.options ?? []).slice(0, 9);
+      const multi = !!q.multiSelect;
+      const sel = multi ? questionSel(p.qn.rpcId) : null;
+      let budget = Math.max(6, termRows() - 8);
+      row(C.bold("⏸ question") + (q.header ? C.gray("  " + sanitizeLine(q.header)) : ""));
+      budget -= 1;
+      for (const l of wrap(sanitizeLine(q.question ?? ""), inner).slice(0, 3)) { row(l); budget -= 1; }
+      if (q.detail && budget > 4) {
+        row(""); budget -= 1;
+        for (const l of wrap(sanitizeLine(q.detail), inner - 2).slice(0, 4)) {
+          if (budget <= 3) break;
+          row(C.gray("  " + l)); budget -= 1;
+        }
+      }
+      row(""); budget -= 1;
+      // Every option gets its label; whatever rows are left go to descriptions.
+      const descMax = Math.max(0, Math.min(2, Math.floor((budget - opts.length) / Math.max(1, opts.length))));
+      for (const [i, o] of opts.entries()) {
+        if (budget <= 0) break;
+        const mark = multi ? (sel.has(i) ? C.green("[x]") : C.gray("[ ]")) : C.gray("▸");
+        row(C.cyan(` ${i + 1}`) + " " + mark + " " + truncVis(sanitizeLine(o?.label ?? String(o)), Math.max(4, inner - 8)));
+        budget -= 1;
+        if (o?.description && descMax > 0)
+          for (const l of wrap(sanitizeLine(o.description), inner - 6).slice(0, descMax)) {
+            if (budget <= 1) break;
+            row(C.gray("     " + l)); budget -= 1;
+          }
+      }
+      const more = (q.options?.length ?? 0) - opts.length;
+      if (more > 0 && budget > 0) row(C.gray(`     +${more} more — answer in the browser tab`));
       lines.push(bar("╰", "╯", C.red));
-      lines.push(hintRow(cols, "1-9 answers · or answer in the browser tab"));
+      lines.push(hintRow(cols, multi
+        ? "1-9 toggle · enter submit · 0 clear · or answer in the browser tab"
+        : "1-9 answers · or answer in the browser tab"));
     }
     return { lines };
   }
@@ -1053,12 +1123,14 @@ function routeKey(k) {
   const p = pendingPanel();
   if (p && (p.kind === "approval" || p.answerable)) {
     if (k.ctrl && k.name === "c") return quit(0);
+    if (p.kind === "question" && k.name === "enter") { submitQuestion(); return; }
     if (k.name !== "char") return;
     if (p.kind === "approval") {
       if (k.text === "y" || k.text === "1") return answerApproval("allowed-once");
       if (k.text === "n" || k.text === "2") return answerApproval("rejected");
       return;
     }
+    if (k.text === "0") { clearQuestionSel(); return; }
     if (/[1-9]/.test(k.text)) answerQuestion(parseInt(k.text, 10));
     return;
   }
@@ -1120,6 +1192,8 @@ function plainKeys(chunk) {
     else if (ch === "m") openModelPicker().catch((e) => out(C.red(e.message)));
     else if (ch === "y") answerApproval("allowed-once");
     else if (ch === "n") answerApproval("rejected");
+    else if (ch === "\r" || ch === "\n") submitQuestion();
+    else if (ch === "0") clearQuestionSel();
     else if (/[1-9]/.test(ch)) answerQuestion(parseInt(ch, 10));
   }
 }
